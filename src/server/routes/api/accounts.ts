@@ -585,6 +585,28 @@ export async function accountsRoutes(app: FastifyInstance) {
       if (guessedPlatformUserId) {
         extraConfigPatch.platformUserId = guessedPlatformUserId;
       }
+      const normalizedLoginPlatform = String(
+        adapter.platformName || site.platform || "",
+      )
+        .trim()
+        .toLowerCase();
+      if (normalizedLoginPlatform === "sub2api") {
+        if (loginResult.refreshToken) {
+          const sub2apiAuth: Record<string, unknown> = {
+            refreshToken: loginResult.refreshToken,
+          };
+          if (
+            typeof loginResult.tokenExpiresAt === "number" &&
+            Number.isFinite(loginResult.tokenExpiresAt) &&
+            loginResult.tokenExpiresAt > 0
+          ) {
+            sub2apiAuth.tokenExpiresAt = Math.trunc(loginResult.tokenExpiresAt);
+          }
+          extraConfigPatch.sub2apiAuth = sub2apiAuth;
+        } else {
+          extraConfigPatch.sub2apiAuth = undefined;
+        }
+      }
       const extraConfig = mergeAccountExtraConfig(
         existing?.extraConfig,
         extraConfigPatch,

@@ -465,9 +465,68 @@ describe('Sub2ApiAdapter', () => {
     await expect(adapter.getBalance(baseUrl, 'expired-token')).rejects.toThrow();
   });
 
-  it('login returns unsupported', async () => {
-    const result = await adapter.login('http://localhost', 'user', 'pass');
+  it('logs in with email/password through /api/v1/auth/login', async () => {
+    let loginPayload: Record<string, unknown> | null = null;
+    await startServer((req, res) => {
+      if (req.url === '/api/v1/auth/login' && req.method === 'POST') {
+        let rawBody = '';
+        req.setEncoding('utf8');
+        req.on('data', (chunk) => {
+          rawBody += chunk;
+        });
+        req.on('end', () => {
+          loginPayload = JSON.parse(rawBody);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            code: 0,
+            message: 'success',
+            data: {
+              access_token: 'Bearer jwt-login-token',
+              refresh_token: 'refresh-token-1',
+              expires_in: 3600,
+              user: {
+                username: '',
+                email: 'login-user@example.com',
+              },
+            },
+          }));
+        });
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    const beforeLoginMs = Date.now();
+    const result = await adapter.login(baseUrl, 'login-user@example.com', 'secret-pass');
+
+    expect(loginPayload).toEqual({
+      email: 'login-user@example.com',
+      password: 'secret-pass',
+    });
+    expect(result.success).toBe(true);
+    expect(result.accessToken).toBe('jwt-login-token');
+    expect(result.refreshToken).toBe('refresh-token-1');
+    expect(result.username).toBe('login-user');
+    expect(result.tokenExpiresAt).toBeGreaterThanOrEqual(beforeLoginMs + 3600 * 1000);
+    expect(result.tokenExpiresAt).toBeLessThanOrEqual(Date.now() + 3600 * 1000 + 1000);
+  });
+
+  it('surfaces sub2api login failure messages', async () => {
+    await startServer((req, res) => {
+      if (req.url === '/api/v1/auth/login' && req.method === 'POST') {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          code: 401,
+          message: 'invalid email or password',
+        }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    const result = await adapter.login(baseUrl, 'login-user@example.com', 'bad-pass');
     expect(result.success).toBe(false);
+    expect(result.message).toContain('invalid email or password');
   });
 
   it('accepts bearer-prefixed access tokens when verifying session tokens', async () => {

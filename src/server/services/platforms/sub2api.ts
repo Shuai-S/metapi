@@ -21,7 +21,7 @@ function normalizeBaseUrl(baseUrl: string): string {
  * Sub2API adapter.
  *
  * Sub2API uses JWT-based auth with endpoints under /api/v1/*.
- * It does NOT support: login or check-in.
+ * It does NOT support: check-in.
  * Balance is derived from a USD amount returned by /api/v1/auth/me.
  */
 export class Sub2ApiAdapter extends BasePlatformAdapter {
@@ -80,6 +80,54 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
     const parsed = Date.parse(trimmed);
     if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
     return undefined;
+  }
+
+  private parseExpiresInSeconds(raw: unknown): number | undefined {
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return Math.trunc(raw);
+    if (typeof raw === 'string') {
+      const parsed = Number.parseInt(raw.trim(), 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return undefined;
+  }
+
+  private parseLoginCredentials(raw: unknown): {
+    accessToken: string;
+    refreshToken?: string;
+    tokenExpiresAt?: number;
+    username?: string;
+  } | null {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const data = raw as Record<string, unknown>;
+    const accessToken = this.stripBearerPrefix(
+      typeof data.access_token === 'string'
+        ? data.access_token
+        : (typeof data.accessToken === 'string' ? data.accessToken : ''),
+    );
+    if (!accessToken) return null;
+
+    const refreshToken = typeof data.refresh_token === 'string'
+      ? data.refresh_token.trim()
+      : (typeof data.refreshToken === 'string' ? data.refreshToken.trim() : '');
+    const expiresInSeconds = this.parseExpiresInSeconds(data.expires_in ?? data.expiresIn);
+    const user = data.user && typeof data.user === 'object' && !Array.isArray(data.user)
+      ? data.user as Record<string, unknown>
+      : null;
+    const username = this.getDisplayName(
+      typeof user?.username === 'string'
+        ? user.username
+        : (typeof data.username === 'string' ? data.username : ''),
+      typeof user?.email === 'string'
+        ? user.email
+        : (typeof data.email === 'string' ? data.email : ''),
+    );
+
+    return {
+      accessToken,
+      ...(refreshToken ? { refreshToken } : {}),
+      ...(expiresInSeconds ? { tokenExpiresAt: Date.now() + expiresInSeconds * 1000 } : {}),
+      ...(username ? { username } : {}),
+    };
   }
 
   private parseSubscriptionItem(raw: unknown): SubscriptionPlanSummary | null {
@@ -688,13 +736,40 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
     return Math.round(Math.max(0, balanceUsd) * 500000);
   }
 
-  // --- Login: Not supported (JWT only) ---
+  // --- Login ---
   override async login(
-    _baseUrl: string,
-    _username: string,
-    _password: string,
-  ): Promise<{ success: false; message: string }> {
-    return { success: false, message: 'Sub2API uses JWT authentication; login is not supported' };
+    baseUrl: string,
+    username: string,
+    password: string,
+  ): Promise<{
+    success: boolean;
+    accessToken?: string;
+    username?: string;
+    refreshToken?: string;
+    tokenExpiresAt?: number;
+    message?: string;
+  }> {
+    const endpoint = '/api/v1/auth/login';
+    try {
+      const res = await this.fetchJson<any>(`${normalizeBaseUrl(baseUrl)}${endpoint}`, {
+        method: 'POST',
+        body: JSON.stringify({ email: username, password }),
+      });
+      const data = this.parseSub2ApiEnvelope<any>(res, endpoint);
+      const credentials = this.parseLoginCredentials(data);
+      if (!credentials) {
+        return { success: false, message: '登录失败：未获取到 Sub2API 访问令牌' };
+      }
+      return {
+        success: true,
+        accessToken: credentials.accessToken,
+        username: credentials.username || username,
+        refreshToken: credentials.refreshToken,
+        tokenExpiresAt: credentials.tokenExpiresAt,
+      };
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Sub2API 登录请求失败' };
+    }
   }
 
   // --- User Info ---

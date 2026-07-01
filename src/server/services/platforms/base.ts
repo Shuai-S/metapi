@@ -41,6 +41,8 @@ interface LoginResult {
   success: boolean;
   accessToken?: string;
   username?: string;
+  refreshToken?: string;
+  tokenExpiresAt?: number;
   message?: string;
 }
 
