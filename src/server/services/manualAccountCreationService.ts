@@ -151,6 +151,12 @@ function buildQueuedAccountInitializationMessage(
   return '已添加为 API Key 账号，后台正在同步模型和路由信息。';
 }
 
+function normalizeOptionalRemark(input: unknown): string | null {
+  if (input === undefined || input === null) return null;
+  const trimmed = String(input).trim();
+  return trimmed || null;
+}
+
 export async function createManualAccount({
   body,
   site,
@@ -247,6 +253,7 @@ export async function createManualAccount({
     values: {
       siteId: body.siteId,
       username: username || undefined,
+      remark: normalizeOptionalRemark(body.remark),
       accessToken,
       apiToken: apiToken || undefined,
       checkinEnabled: tokenType === 'session' ? (body.checkinEnabled ?? true) : false,

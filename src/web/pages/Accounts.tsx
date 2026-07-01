@@ -74,13 +74,14 @@ const SITE_SELECT_SEARCH_PLACEHOLDER = "筛选站点（名称 / 平台 / URL）"
 const ACCOUNT_SEARCH_PLACEHOLDER = "搜索账号 / 站点 / 状态 / ID";
 
 function createLoginForm() {
-  return { siteId: 0, username: "", password: "" };
+  return { siteId: 0, username: "", password: "", remark: "" };
 }
 
 function createTokenForm(credentialMode: "session" | "apikey" = "session") {
   return {
     siteId: 0,
     username: "",
+    remark: "",
     accessToken: "",
     platformUserId: "",
     refreshToken: "",
@@ -153,6 +154,7 @@ export default function Accounts() {
     status: "active",
     checkinEnabled: true,
     unitCost: "",
+    remark: "",
     accessToken: "",
     apiToken: "",
     isPinned: false,
@@ -314,6 +316,7 @@ export default function Accounts() {
         `#${account?.id}`,
         resolveAccountDisplayName(account),
         account?.username,
+        account?.remark,
         credentialMode,
         credentialMode === "apikey" ? "api key API Key API Key连接" : "session Session Session连接",
         status,
@@ -322,6 +325,7 @@ export default function Accounts() {
         status === "active" ? "active 启用 正常" : "",
         site?.id,
         site?.name,
+        site?.remark,
         site?.platform,
         site?.url,
         site?.status,
@@ -506,6 +510,7 @@ export default function Accounts() {
       const result = await api.addAccount({
         siteId: tokenForm.siteId,
         username: tokenForm.username.trim() || undefined,
+        remark: tokenForm.remark.trim() || undefined,
         accessToken: tokenForm.accessToken,
         accessTokens: isBatchApiKeyInput ? parsedApiKeys : undefined,
         platformUserId: tokenForm.platformUserId
@@ -986,6 +991,7 @@ export default function Accounts() {
         account?.unitCost === null || account?.unitCost === undefined
           ? ""
           : String(account.unitCost),
+      remark: account?.remark || "",
       accessToken: account?.accessToken || "",
       apiToken: account?.apiToken || "",
       isPinned: !!account?.isPinned,
@@ -1011,6 +1017,7 @@ export default function Accounts() {
         unitCost: editForm.unitCost.trim()
           ? Number(editForm.unitCost.trim())
           : null,
+        remark: editForm.remark.trim() || null,
         accessToken: editForm.accessToken.trim(),
         apiToken: editForm.apiToken.trim() || null,
         isPinned: editForm.isPinned,
@@ -1783,6 +1790,21 @@ export default function Accounts() {
                       style={inputStyle}
                     />
                     <textarea
+                      placeholder="备注（可选）"
+                      value={tokenForm.remark}
+                      onChange={(e) =>
+                        setTokenForm((f) => ({
+                          ...f,
+                          remark: e.target.value,
+                        }))
+                      }
+                      style={{
+                        ...inputStyle,
+                        minHeight: 64,
+                        resize: "vertical" as const,
+                      }}
+                    />
+                    <textarea
                       placeholder="粘贴 Session Access Token 或浏览器 Cookie"
                       value={tokenForm.accessToken}
                       onChange={(e) => {
@@ -2105,6 +2127,21 @@ export default function Accounts() {
                       onKeyDown={(e) => e.key === "Enter" && handleLoginAdd()}
                       style={inputStyle}
                     />
+                    <textarea
+                      placeholder="备注（可选）"
+                      value={loginForm.remark}
+                      onChange={(e) =>
+                        setLoginForm((f) => ({
+                          ...f,
+                          remark: e.target.value,
+                        }))
+                      }
+                      style={{
+                        ...inputStyle,
+                        minHeight: 64,
+                        resize: "vertical" as const,
+                      }}
+                    />
                     <button
                       onClick={handleLoginAdd}
                       disabled={
@@ -2226,6 +2263,22 @@ export default function Accounts() {
                     }))
                   }
                   style={inputStyle}
+                />
+                <textarea
+                  placeholder="备注（可选）"
+                  value={tokenForm.remark}
+                  onChange={(e) =>
+                    setTokenForm((f) => ({
+                      ...f,
+                      remark: e.target.value,
+                      credentialMode: "apikey",
+                    }))
+                  }
+                  style={{
+                    ...inputStyle,
+                    minHeight: 64,
+                    resize: "vertical" as const,
+                  }}
                 />
                 <textarea
                   placeholder="粘贴 API Key"
@@ -2714,6 +2767,21 @@ export default function Accounts() {
                   }
                   style={inputStyle}
                 />
+                <textarea
+                  placeholder="备注（可选）"
+                  value={editForm.remark}
+                  onChange={(e) =>
+                    setEditForm((prev) => ({
+                      ...prev,
+                      remark: e.target.value,
+                    }))
+                  }
+                  style={{
+                    ...inputStyle,
+                    minHeight: 72,
+                    resize: "vertical" as const,
+                  }}
+                />
                 <label
                   style={{
                     display: "flex",
@@ -3038,6 +3106,11 @@ export default function Accounts() {
                               }
                             />
                             <MobileField
+                              label="备注"
+                              stacked
+                              value={a.remark?.trim() || "-"}
+                            />
+                            <MobileField
                               label="提示"
                               stacked
                               value={hintMessage}
@@ -3213,6 +3286,20 @@ export default function Accounts() {
                             <div style={{ fontWeight: 600 }}>
                               {resolveAccountDisplayName(a)}
                             </div>
+                            {a.remark?.trim() ? (
+                              <div
+                                style={{
+                                  marginTop: 4,
+                                  fontSize: 12,
+                                  color: "var(--color-text-muted)",
+                                  maxWidth: 220,
+                                  whiteSpace: "pre-wrap",
+                                  wordBreak: "break-word",
+                                }}
+                              >
+                                {a.remark.trim()}
+                              </div>
+                            ) : null}
                             <div
                               style={{ display: "flex", gap: 4, marginTop: 4 }}
                             >

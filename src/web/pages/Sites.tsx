@@ -58,6 +58,7 @@ type SiteRow = {
   name: string;
   url: string;
   externalCheckinUrl?: string | null;
+  remark?: string | null;
   platform?: string;
   status?: string;
   proxyUrl?: string | null;
@@ -761,6 +762,7 @@ export default function Sites() {
       name: form.name.trim(),
       url: primarySiteUrlAnalysis.persistedUrl || form.url.trim(),
       externalCheckinUrl: form.externalCheckinUrl.trim(),
+      remark: form.remark.trim() || null,
       platform: form.platform.trim(),
       initializationPresetId: selectedInitializationPresetId,
       proxyUrl: form.proxyUrl.trim(),
@@ -1399,6 +1401,12 @@ export default function Sites() {
               value={form.externalCheckinUrl}
               onChange={(e) => setForm((prev) => ({ ...prev, externalCheckinUrl: e.target.value }))}
               style={formInputStyle}
+            />
+            <textarea
+              placeholder="备注（可选）"
+              value={form.remark}
+              onChange={(e) => setForm((prev) => ({ ...prev, remark: e.target.value }))}
+              style={{ ...formInputStyle, minHeight: 72, resize: 'vertical', gridColumn: isMobile ? undefined : '1 / -1' }}
             />
           </ResponsiveFormGrid>
           {activeInitializationPreset && (
@@ -2114,6 +2122,11 @@ export default function Sites() {
                           ) : '-'}
                         />
                         <MobileField
+                          label="备注"
+                          stacked
+                          value={site.remark?.trim() || '-'}
+                        />
+                        <MobileField
                           label="自定义头"
                           value={hasConfiguredCustomHeaders(site.customHeaders) ? '已配置' : '-'}
                         />
@@ -2174,6 +2187,7 @@ export default function Sites() {
                     />
                   </th>
                   <th>名称</th>
+                  <th>备注</th>
                   <th>外部签到站URL</th>
                   <th>总余额</th>
                   <th>状态</th>
@@ -2226,6 +2240,9 @@ export default function Sites() {
                           API 地址: {buildSiteApiEndpointSummary(site)}
                         </span>
                       </div>
+                    </td>
+                    <td style={{ maxWidth: 220, color: 'var(--color-text-muted)', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      {site.remark?.trim() || '-'}
                     </td>
                     <td className="sites-url-cell" style={{ maxWidth: 300 }}>
                       {site.externalCheckinUrl ? (

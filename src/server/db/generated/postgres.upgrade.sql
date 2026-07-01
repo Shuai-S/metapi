@@ -1,1 +1,2 @@
--- no schema changes detected for postgres
+ALTER TABLE "accounts" ADD COLUMN "remark" TEXT;
+ALTER TABLE "sites" ADD COLUMN "remark" TEXT;

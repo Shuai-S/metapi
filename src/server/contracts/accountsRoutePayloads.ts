@@ -5,6 +5,7 @@ const accountCredentialModeSchema = z.enum(['auto', 'session', 'apikey']);
 const accountCreatePayloadSchema = z.object({
   siteId: z.number().int().positive(),
   username: z.string().optional(),
+  remark: z.union([z.string(), z.null()]).optional(),
   accessToken: z.string().optional(),
   accessTokens: z.array(z.string()).optional(),
   apiToken: z.string().optional(),
@@ -18,6 +19,7 @@ const accountCreatePayloadSchema = z.object({
 
 const accountUpdatePayloadSchema = z.object({
   username: z.string().optional(),
+  remark: z.union([z.string(), z.null()]).optional(),
   accessToken: z.string().optional(),
   apiToken: z.union([z.string(), z.null()]).optional(),
   status: z.string().optional(),
@@ -52,6 +54,7 @@ const accountLoginPayloadSchema = z.object({
   siteId: z.number().int().positive(),
   username: z.string(),
   password: z.string(),
+  remark: z.union([z.string(), z.null()]).optional(),
 }).passthrough();
 
 const accountVerifyTokenPayloadSchema = z.object({
@@ -89,6 +92,9 @@ function formatAccountsPayloadError(error: z.ZodError): string {
   }
   if (firstPath === 'username') {
     return 'Invalid username. Expected string.';
+  }
+  if (firstPath === 'remark') {
+    return 'Invalid remark. Expected string or null.';
   }
   if (firstPath === 'password') {
     return 'Invalid password. Expected string.';

@@ -203,6 +203,12 @@
           "notNull": false,
           "defaultValue": null,
           "primaryKey": false
+        },
+        "remark": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
         }
       }
     },
@@ -2112,6 +2118,12 @@
           "logicalType": "integer",
           "notNull": false,
           "defaultValue": "0",
+          "primaryKey": false
+        },
+        "remark": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
           "primaryKey": false
         }
       }

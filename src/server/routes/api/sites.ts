@@ -130,6 +130,20 @@ function normalizeOptionalExternalCheckinUrl(input: unknown): {
   return { valid: true, present: true, url: parsed.toString().replace(/\/+$/, '') };
 }
 
+function normalizeOptionalRemark(input: unknown): {
+  present: boolean;
+  remark: string | null;
+} {
+  if (input === undefined) {
+    return { present: false, remark: null };
+  }
+  if (input === null) {
+    return { present: true, remark: null };
+  }
+  const trimmed = String(input).trim();
+  return { present: true, remark: trimmed || null };
+}
+
 type ErrorLike = {
   message?: string;
   code?: string | number;
@@ -511,6 +525,7 @@ export async function sitesRoutes(app: FastifyInstance) {
       useSystemProxy,
       customHeaders,
       externalCheckinUrl,
+      remark,
       status,
       isPinned,
       sortOrder,
@@ -533,6 +548,7 @@ export async function sitesRoutes(app: FastifyInstance) {
     if (!normalizedExternalCheckinUrl.valid) {
       return reply.code(400).send({ error: 'Invalid externalCheckinUrl. Expected a valid http(s) URL.' });
     }
+    const normalizedRemark = normalizeOptionalRemark(remark);
     const normalizedPinned = normalizePinnedFlag(isPinned);
     if (isPinned !== undefined && normalizedPinned === null) {
       return reply.code(400).send({ error: 'Invalid isPinned value. Expected boolean.' });
@@ -604,6 +620,7 @@ export async function sitesRoutes(app: FastifyInstance) {
           useSystemProxy: normalizedUseSystemProxy ?? false,
           customHeaders: normalizedCustomHeaders.customHeaders,
           externalCheckinUrl: normalizedExternalCheckinUrl.url,
+          remark: normalizedRemark.remark,
           status: normalizedStatus ?? 'active',
           isPinned: normalizedPinned ?? false,
           sortOrder: normalizedSortOrder ?? (maxSortOrder + 1),
@@ -727,6 +744,8 @@ export async function sitesRoutes(app: FastifyInstance) {
     if (body.useSystemProxy !== undefined) updates.useSystemProxy = normalizedUseSystemProxy;
     if (normalizedCustomHeaders.present) updates.customHeaders = normalizedCustomHeaders.customHeaders;
     if (normalizedExternalCheckinUrl.present) updates.externalCheckinUrl = normalizedExternalCheckinUrl.url;
+    const normalizedRemark = normalizeOptionalRemark(body.remark);
+    if (normalizedRemark.present) updates.remark = normalizedRemark.remark;
     if (body.status !== undefined) updates.status = normalizedStatus;
     if (body.isPinned !== undefined) updates.isPinned = normalizedPinned;
     if (body.sortOrder !== undefined) updates.sortOrder = normalizedSortOrder;

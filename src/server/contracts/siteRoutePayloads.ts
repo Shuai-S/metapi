@@ -12,6 +12,7 @@ const siteCreatePayloadSchema = z.object({
   useSystemProxy: unknownField,
   customHeaders: unknownField,
   externalCheckinUrl: unknownField,
+  remark: z.union([z.string(), z.null()]).optional(),
   status: unknownField,
   isPinned: unknownField,
   sortOrder: unknownField,
@@ -26,6 +27,7 @@ const siteUpdatePayloadSchema = z.object({
   useSystemProxy: unknownField,
   customHeaders: unknownField,
   externalCheckinUrl: unknownField,
+  remark: z.union([z.string(), z.null()]).optional(),
   status: unknownField,
   isPinned: unknownField,
   sortOrder: unknownField,
@@ -70,6 +72,9 @@ function formatSitePayloadError(error: z.ZodError): string {
   }
   if (firstPath === 'platform') {
     return 'Invalid platform. Expected string.';
+  }
+  if (firstPath === 'remark') {
+    return 'Invalid remark. Expected string or null.';
   }
   if (firstPath === 'ids') {
     return 'Invalid ids. Expected number[].';

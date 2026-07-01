@@ -217,6 +217,20 @@ function normalizeManagedTokenExpiresAt(input: unknown): number | undefined {
   return undefined;
 }
 
+function normalizeOptionalRemark(input: unknown): {
+  present: boolean;
+  remark: string | null;
+} {
+  if (input === undefined) {
+    return { present: false, remark: null };
+  }
+  if (input === null) {
+    return { present: true, remark: null };
+  }
+  const trimmed = String(input).trim();
+  return { present: true, remark: trimmed || null };
+}
+
 async function getNextAccountSortOrder(): Promise<number> {
   const rows = await db
     .select({ sortOrder: schema.accounts.sortOrder })
@@ -509,7 +523,8 @@ export async function accountsRoutes(app: FastifyInstance) {
           .send({ success: false, message: parsedBody.error });
       }
 
-      const { siteId, username, password } = parsedBody.data;
+      const { siteId, username, password, remark } = parsedBody.data;
+      const normalizedRemark = normalizeOptionalRemark(remark);
 
       // Get site info
       const site = await db
@@ -623,6 +638,7 @@ export async function accountsRoutes(app: FastifyInstance) {
             checkinEnabled: true,
             status: "active",
             extraConfig,
+            ...(normalizedRemark.present ? { remark: normalizedRemark.remark } : {}),
             updatedAt: new Date().toISOString(),
           })
           .where(eq(schema.accounts.id, existing.id))
@@ -636,6 +652,7 @@ export async function accountsRoutes(app: FastifyInstance) {
           values: {
             siteId,
             username,
+            remark: normalizedRemark.remark,
             accessToken: loginResult.accessToken,
             apiToken: preferredApiToken || undefined,
             checkinEnabled: true,
@@ -1455,6 +1472,9 @@ export async function accountsRoutes(app: FastifyInstance) {
       ]) {
         if (body[key] !== undefined) updates[key] = body[key];
       }
+
+      const normalizedRemark = normalizeOptionalRemark(body.remark);
+      if (normalizedRemark.present) updates.remark = normalizedRemark.remark;
 
       const wantsManagedSub2ApiAuthPatch =
         Object.prototype.hasOwnProperty.call(body, "refreshToken") ||
