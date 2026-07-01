@@ -19,6 +19,7 @@ import { getSiteInitializationPreset } from '../../../shared/siteInitializationP
 import { normalizeSiteApiEndpointBaseUrl } from '../../services/siteApiEndpointService.js';
 import { analyzePrimarySiteUrl } from '../../../shared/sitePrimaryUrl.js';
 import { probeSiteModels } from '../../services/modelService.js';
+import type { PlatformDetectionContext } from '../../services/platforms/base.js';
 
 function sseWrite(raw: import('http').ServerResponse, event: string, data: unknown) {
   try { raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { /* ignore */ }
@@ -46,6 +47,43 @@ function normalizePinnedFlag(input: unknown): boolean | null {
 
 function normalizeUseSystemProxyFlag(input: unknown): boolean | null {
   return normalizePinnedFlag(input);
+}
+
+function buildPlatformDetectionContext(input: {
+  proxyUrl?: unknown;
+  useSystemProxy?: unknown;
+}, reply: FastifyReply): PlatformDetectionContext | { error: FastifyReply } {
+  const hasProxyInput = input.proxyUrl !== undefined || input.useSystemProxy !== undefined;
+  const normalizedUseSystemProxy = normalizeUseSystemProxyFlag(input.useSystemProxy);
+  if (input.useSystemProxy !== undefined && normalizedUseSystemProxy === null) {
+    return {
+      error: reply.code(400).send({ error: 'Invalid useSystemProxy value. Expected boolean.' }),
+    };
+  }
+
+  const normalizedProxyUrl = parseSiteProxyUrlInput(input.proxyUrl);
+  if (!normalizedProxyUrl.valid) {
+    return {
+      error: reply.code(400).send({ error: 'Invalid proxyUrl. Expected a valid http(s)/socks proxy URL.' }),
+    };
+  }
+
+  if (!hasProxyInput) {
+    return {};
+  }
+
+  return {
+    siteProxy: {
+      proxyUrl: normalizedProxyUrl.proxyUrl,
+      useSystemProxy: normalizedUseSystemProxy ?? false,
+    },
+  };
+}
+
+function isDetectionContextResult(
+  input: PlatformDetectionContext | { error: FastifyReply },
+): input is PlatformDetectionContext {
+  return !('error' in input);
 }
 
 function normalizeSortOrder(input: unknown): number | null {
@@ -534,7 +572,12 @@ export async function sitesRoutes(app: FastifyInstance) {
       if (explicitInitializationPreset) {
         detectedPlatform = explicitInitializationPreset.platform;
       } else {
-        const detected = await detectSite(detectionUrl);
+        const detectionContext = buildPlatformDetectionContext({
+          proxyUrl,
+          useSystemProxy,
+        }, reply);
+        if (!isDetectionContextResult(detectionContext)) return detectionContext.error;
+        const detected = await detectSite(detectionUrl, detectionContext);
         detectedPlatform = detected?.platform ?? null;
         responseInitializationPresetId = detected?.initializationPresetId || null;
       }
@@ -967,7 +1010,9 @@ export async function sitesRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: parsedBody.error });
     }
 
-    const result = await detectSite(parsedBody.data.url);
+    const detectionContext = buildPlatformDetectionContext(parsedBody.data, reply);
+    if (!isDetectionContextResult(detectionContext)) return detectionContext.error;
+    const result = await detectSite(parsedBody.data.url, detectionContext);
     return result || { error: 'Could not detect platform' };
   });
 }

@@ -175,4 +175,52 @@ describe('Accounts batch actions', () => {
       root?.unmount();
     }
   });
+
+  it('filters visible accounts by keyword and selects only matching rows', async () => {
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/accounts']}>
+            <ToastProvider>
+              <Accounts />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      const searchInput = root.root.find((node) => node.props['data-testid'] === 'accounts-search-input');
+      await act(async () => {
+        searchInput.props.onChange({ target: { value: 'beta' } });
+      });
+      await flushMicrotasks();
+
+      expect(() => root.root.find((node) => node.props['data-testid'] === 'account-row-1')).toThrow();
+      expect(root.root.find((node) => node.props['data-testid'] === 'account-row-2')).toBeTruthy();
+
+      const selectAll = root.root.find((node) => (
+        node.type === 'input'
+        && node.props.type === 'checkbox'
+        && node.props['aria-label'] === '选择全部可见账号'
+      ));
+      await act(async () => {
+        selectAll.props.onChange({ target: { checked: true } });
+      });
+      await flushMicrotasks();
+
+      const batchButton = root.root.find((node) => node.props['data-testid'] === 'accounts-batch-refresh-balance');
+      await act(async () => {
+        batchButton.props.onClick();
+      });
+      await flushMicrotasks();
+
+      expect(apiMock.batchUpdateAccounts).toHaveBeenLastCalledWith({
+        ids: [2],
+        action: 'refreshBalance',
+      });
+    } finally {
+      root?.unmount();
+    }
+  });
 });

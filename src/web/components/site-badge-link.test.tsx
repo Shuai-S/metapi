@@ -19,6 +19,25 @@ describe('SiteBadgeLink', () => {
     root.unmount();
   });
 
+  it('opens the site url directly when provided', () => {
+    const root = create(
+      <MemoryRouter>
+        <SiteBadgeLink
+          siteId={7}
+          siteName="Demo Site"
+          siteUrl="https://demo.example.com"
+        />
+      </MemoryRouter>,
+    );
+
+    const link = root.root.findByType('a');
+    expect(String(link.props.href || '')).toBe('https://demo.example.com');
+    expect(link.props.target).toBe('_blank');
+    expect(link.props.rel).toBe('noopener noreferrer');
+
+    root.unmount();
+  });
+
   it('falls back to plain badge text when site id is invalid', () => {
     const root = create(
       <MemoryRouter>

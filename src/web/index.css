@@ -2841,6 +2841,10 @@ textarea {
   justify-content: flex-end;
 }
 
+.accounts-page-actions .accounts-search-input {
+  max-width: 320px;
+}
+
 .sites-page-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -6421,6 +6425,12 @@ textarea {
 
   .accounts-page-actions .accounts-sort-select {
     flex: 1 1 100%;
+    min-width: 0 !important;
+  }
+
+  .accounts-page-actions .accounts-search-input {
+    flex: 1 1 100% !important;
+    max-width: none;
     min-width: 0 !important;
   }
 

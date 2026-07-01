@@ -107,6 +107,12 @@ describe('Accounts segmented connections view', () => {
       expect(segmentButtons[1]?.props['data-tooltip-align']).toBe('center');
       expect(segmentButtons[2]?.props['data-tooltip-side']).toBe('bottom');
       expect(segmentButtons[2]?.props['data-tooltip-align']).toBe('end');
+
+      const siteLinks = root.root.findAll(
+        (node) => node.type === 'a' && String(node.props.href || '') === 'https://key.example.com',
+      );
+      expect(siteLinks).toHaveLength(1);
+      expect(siteLinks[0]?.props.target).toBe('_blank');
     } finally {
       root?.unmount();
     }

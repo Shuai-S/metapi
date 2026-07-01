@@ -3,13 +3,18 @@ import { describe, expect, it, beforeAll, beforeEach, afterAll } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { type AddressInfo } from 'node:net';
+import { type Duplex } from 'node:stream';
 
 type DbModule = typeof import('../../db/index.js');
+type ConfigModule = typeof import('../../config.js');
 
 describe('sites proxy settings', () => {
   let app: FastifyInstance;
   let db: DbModule['db'];
   let schema: DbModule['schema'];
+  let config: ConfigModule['config'];
   let dataDir = '';
 
   beforeAll(async () => {
@@ -17,8 +22,10 @@ describe('sites proxy settings', () => {
     process.env.DATA_DIR = dataDir;
 
     await import('../../db/migrate.js');
+    const configModule = await import('../../config.js');
     const dbModule = await import('../../db/index.js');
     const routesModule = await import('./sites.js');
+    config = configModule.config;
     db = dbModule.db;
     schema = dbModule.schema;
 
@@ -32,9 +39,65 @@ describe('sites proxy settings', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
     delete process.env.DATA_DIR;
   });
+
+  async function withHttpServer(
+    handler: (req: IncomingMessage, res: ServerResponse) => void,
+    run: (baseUrl: string) => Promise<void>,
+    connectHandler?: (req: IncomingMessage, socket: Duplex) => void,
+  ) {
+    const server = createServer(handler);
+    if (connectHandler) {
+      server.on('connect', (req, socket) => connectHandler(req, socket));
+    }
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', () => resolve());
+    });
+
+    const { port } = server.address() as AddressInfo;
+    try {
+      await run(`http://127.0.0.1:${port}`);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error?: Error) => (error ? reject(error) : resolve()));
+      });
+    }
+  }
+
+  function writeNewApiStatusResponse(res: ServerResponse | Duplex) {
+    const body = JSON.stringify({
+      success: true,
+      data: { system_name: 'New API via proxy' },
+    });
+    const headers = [
+      'HTTP/1.1 200 OK',
+      'Content-Type: application/json',
+      `Content-Length: ${Buffer.byteLength(body)}`,
+      'Connection: close',
+      '',
+      body,
+    ].join('\r\n');
+    if ('writeHead' in res) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(body);
+      return;
+    }
+    res.end(headers);
+  }
+
+  function handleNewApiStatusConnect(socket: Duplex, onStatusRequest: () => void) {
+    socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+    socket.once('data', (chunk) => {
+      if (chunk.toString('utf8').includes('/api/status')) {
+        onStatusRequest();
+        writeNewApiStatusResponse(socket);
+        return;
+      }
+      socket.end('HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+    });
+  }
 
   it('stores proxy settings, external checkin url, and custom headers when creating a site', async () => {
     const response = await app.inject({
@@ -473,6 +536,83 @@ describe('sites proxy settings', () => {
 
     expect(response.statusCode).toBe(400);
     expect((response.json() as { error?: string }).error).toContain('url');
+  });
+
+  it('runs explicit detect probes through the submitted system proxy setting', async () => {
+    const previousSystemProxyUrl = config.systemProxyUrl;
+    let proxiedStatusRequests = 0;
+    try {
+      await withHttpServer((req, res) => {
+        if (req.url?.includes('/api/status')) {
+          proxiedStatusRequests += 1;
+          writeNewApiStatusResponse(res);
+          return;
+        }
+        res.writeHead(404).end();
+      }, async (proxyBaseUrl) => {
+        config.systemProxyUrl = proxyBaseUrl;
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/sites/detect',
+          payload: {
+            url: 'http://unreachable-detect.example.com',
+            useSystemProxy: true,
+          },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject({
+          platform: 'new-api',
+        });
+        expect(proxiedStatusRequests).toBeGreaterThan(0);
+      }, (_req, socket) => {
+        handleNewApiStatusConnect(socket, () => {
+          proxiedStatusRequests += 1;
+        });
+      });
+    } finally {
+      config.systemProxyUrl = previousSystemProxyUrl;
+    }
+  });
+
+  it('uses submitted system proxy settings when create needs platform auto-detection', async () => {
+    const previousSystemProxyUrl = config.systemProxyUrl;
+    let proxiedStatusRequests = 0;
+    try {
+      await withHttpServer((req, res) => {
+        if (req.url?.includes('/api/status')) {
+          proxiedStatusRequests += 1;
+          writeNewApiStatusResponse(res);
+          return;
+        }
+        res.writeHead(404).end();
+      }, async (proxyBaseUrl) => {
+        config.systemProxyUrl = proxyBaseUrl;
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/sites',
+          payload: {
+            name: 'proxied-detect-site',
+            url: 'http://unreachable-create.example.com',
+            useSystemProxy: true,
+          },
+        });
+
+        expect(response.statusCode).toBe(200);
+        expect(response.json()).toMatchObject({
+          name: 'proxied-detect-site',
+          platform: 'new-api',
+          useSystemProxy: true,
+        });
+        expect(proxiedStatusRequests).toBeGreaterThan(0);
+      }, (_req, socket) => {
+        handleNewApiStatusConnect(socket, () => {
+          proxiedStatusRequests += 1;
+        });
+      });
+    } finally {
+      config.systemProxyUrl = previousSystemProxyUrl;
+    }
   });
 
   it('does not force CodingPlan preset metadata when the user explicitly chooses generic openai', async () => {

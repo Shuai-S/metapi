@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { RequestInit as UndiciRequestInit } from 'undici';
-import { withSiteProxyRequestInit } from '../siteProxy.js';
+import { withSiteProxyRequestInit, withSiteRecordProxyRequestInit, type SiteProxyConfigLike } from '../siteProxy.js';
 
 export interface CheckinResult {
   success: boolean;
@@ -90,9 +90,13 @@ export interface CreateApiTokenOptions {
   modelLimits?: string;
 }
 
+export type PlatformDetectionContext = {
+  siteProxy?: SiteProxyConfigLike | null;
+};
+
 export interface PlatformAdapter {
   readonly platformName: string;
-  detect(url: string): Promise<boolean>;
+  detect(url: string, context?: PlatformDetectionContext): Promise<boolean>;
   login(baseUrl: string, username: string, password: string): Promise<LoginResult>;
   getUserInfo(baseUrl: string, accessToken: string, platformUserId?: number): Promise<UserInfo | null>;
   verifyToken(baseUrl: string, token: string, platformUserId?: number): Promise<TokenVerifyResult>;
@@ -110,7 +114,7 @@ export interface PlatformAdapter {
 export abstract class BasePlatformAdapter implements PlatformAdapter {
   abstract readonly platformName: string;
 
-  abstract detect(url: string): Promise<boolean>;
+  abstract detect(url: string, context?: PlatformDetectionContext): Promise<boolean>;
   abstract checkin(baseUrl: string, accessToken: string): Promise<CheckinResult>;
   abstract getBalance(baseUrl: string, accessToken: string): Promise<BalanceInfo>;
   abstract getModels(baseUrl: string, token: string, platformUserId?: number): Promise<string[]>;
@@ -219,7 +223,11 @@ export abstract class BasePlatformAdapter implements PlatformAdapter {
     return false;
   }
 
-  protected async fetchJson<T>(url: string, options?: UndiciRequestInit): Promise<T> {
+  protected async fetchJson<T>(
+    url: string,
+    options?: UndiciRequestInit,
+    context?: PlatformDetectionContext,
+  ): Promise<T> {
     const { fetch } = await import('undici');
     const requestOptions: UndiciRequestInit = {
       ...options,
@@ -229,7 +237,9 @@ export abstract class BasePlatformAdapter implements PlatformAdapter {
         ...options?.headers,
       },
     };
-    const proxiedRequestOptions = await withSiteProxyRequestInit(url, requestOptions);
+    const proxiedRequestOptions = context?.siteProxy
+      ? withSiteRecordProxyRequestInit(context.siteProxy, requestOptions)
+      : await withSiteProxyRequestInit(url, requestOptions);
     const res = await fetch(url, proxiedRequestOptions);
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}: ${await res.text()}`);

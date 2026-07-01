@@ -71,6 +71,7 @@ const ACCOUNT_SEGMENTS: Array<{
 ];
 
 const SITE_SELECT_SEARCH_PLACEHOLDER = "筛选站点（名称 / 平台 / URL）";
+const ACCOUNT_SEARCH_PLACEHOLDER = "搜索账号 / 站点 / 状态 / ID";
 
 function createLoginForm() {
   return { siteId: 0, username: "", password: "" };
@@ -115,6 +116,7 @@ export default function Accounts() {
   const [sites, setSites] = useState<any[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("custom");
+  const [accountSearch, setAccountSearch] = useState("");
   const [highlightAccountId, setHighlightAccountId] = useState<number | null>(
     null,
   );
@@ -297,10 +299,49 @@ export default function Accounts() {
   );
   const visibleAccounts = useMemo(() => {
     if (activeSegment === "tokens") return [];
+    const normalizedQuery = accountSearch.trim().toLowerCase();
     return sortedAccounts.filter(
       (account) => resolveAccountCredentialMode(account) === activeSegment,
-    );
-  }, [activeSegment, sortedAccounts]);
+    ).filter((account) => {
+      if (!normalizedQuery) return true;
+      const credentialMode = resolveAccountCredentialMode(account);
+      const status = String(account?.status || "");
+      const site = account?.site || {};
+      const runtimeHealth = account?.runtimeHealth || {};
+      const fields = [
+        account?.id,
+        account?.siteId,
+        `#${account?.id}`,
+        resolveAccountDisplayName(account),
+        account?.username,
+        credentialMode,
+        credentialMode === "apikey" ? "api key API Key API Key连接" : "session Session Session连接",
+        status,
+        status === "expired" ? "已过期 过期" : "",
+        status === "disabled" ? "已禁用 禁用" : "",
+        status === "active" ? "active 启用 正常" : "",
+        site?.id,
+        site?.name,
+        site?.platform,
+        site?.url,
+        site?.status,
+        runtimeHealth?.state,
+        runtimeHealth?.reason,
+        account?.checkinEnabled ? "签到开启" : "签到关闭",
+        account?.isPinned ? "置顶 pinned" : "",
+        account?.balance,
+        account?.balanceUsed,
+        account?.quota,
+        typeof account?.balance === "number" ? account.balance.toFixed(2) : "",
+        typeof account?.balanceUsed === "number" ? account.balanceUsed.toFixed(2) : "",
+        typeof account?.quota === "number" ? account.quota.toFixed(2) : "",
+      ];
+      return fields
+        .filter((field) => field !== undefined && field !== null && field !== "")
+        .some((field) => String(field).toLowerCase().includes(normalizedQuery));
+    });
+  }, [accountSearch, activeSegment, sortedAccounts]);
+  const hasAccountSearch = accountSearch.trim().length > 0;
   const allVisibleAccountsSelected =
     visibleAccounts.length > 0 &&
     visibleAccounts.every((account) => selectedAccountIds.includes(account.id));
@@ -1280,6 +1321,22 @@ export default function Accounts() {
             ) : (
               <>
                 <div
+                  className="accounts-search-input"
+                  style={{ minWidth: 220, flex: "1 1 240px" }}
+                >
+                  <input
+                    data-testid="accounts-search-input"
+                    value={accountSearch}
+                    onChange={(event) => setAccountSearch(event.target.value)}
+                    placeholder={ACCOUNT_SEARCH_PLACEHOLDER}
+                    style={{
+                      ...inputStyle,
+                      height: 34,
+                      padding: "7px 12px",
+                    }}
+                  />
+                </div>
+                <div
                   className="accounts-sort-select"
                   style={{ minWidth: 156, position: "relative", zIndex: 20 }}
                 >
@@ -1361,6 +1418,18 @@ export default function Accounts() {
         mobileTitle="连接排序与操作"
         mobileContent={
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                关键词查询
+              </div>
+              <input
+                data-testid="accounts-mobile-search-input"
+                value={accountSearch}
+                onChange={(event) => setAccountSearch(event.target.value)}
+                placeholder={ACCOUNT_SEARCH_PLACEHOLDER}
+                style={inputStyle}
+              />
+            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
                 排序方式
@@ -2915,6 +2984,7 @@ export default function Accounts() {
                                 <SiteBadgeLink
                                   siteId={a.site?.id}
                                   siteName={a.site?.name}
+                                  siteUrl={a.site?.url}
                                   badgeStyle={{ fontSize: 11 }}
                                 />
                               }
@@ -3089,6 +3159,8 @@ export default function Accounts() {
                     <tr>
                       <th style={{ width: 44 }}>
                         <input
+                          aria-label="选择全部可见账号"
+                          data-testid="accounts-select-all-visible"
                           type="checkbox"
                           checked={allVisibleAccountsSelected}
                           onChange={(e) =>
@@ -3166,6 +3238,7 @@ export default function Accounts() {
                             <SiteBadgeLink
                               siteId={a.site?.id}
                               siteName={a.site?.name}
+                              siteUrl={a.site?.url}
                               badgeStyle={{ fontSize: 11 }}
                             />
                           </td>
@@ -3437,19 +3510,36 @@ export default function Accounts() {
                   />
                 </svg>
                 <div className="empty-state-title">
-                  {activeSegment === "apikey"
-                    ? "暂无 API Key 连接"
-                    : "暂无 Session 连接"}
+                  {hasAccountSearch
+                    ? "未找到匹配连接"
+                    : activeSegment === "apikey"
+                      ? "暂无 API Key 连接"
+                      : "暂无 Session 连接"}
                 </div>
                 <div className="empty-state-desc">
-                  {activeSegment === "apikey"
-                    ? sites.length > 0
-                      ? "请为现有站点补充 API Key 连接"
-                      : "请先添加站点，然后为站点补充 API Key 连接"
-                    : sites.length > 0
-                      ? "请为现有站点添加 Session 连接"
-                      : "请先添加站点，然后添加 Session 连接"}
+                  {hasAccountSearch
+                    ? "请调整关键词，支持账号名、站点、状态和 ID 查询"
+                    : activeSegment === "apikey"
+                      ? sites.length > 0
+                        ? "请为现有站点补充 API Key 连接"
+                        : "请先添加站点，然后为站点补充 API Key 连接"
+                      : sites.length > 0
+                        ? "请为现有站点添加 Session 连接"
+                        : "请先添加站点，然后添加 Session 连接"}
                 </div>
+                {hasAccountSearch && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{
+                      marginTop: 12,
+                      border: "1px solid var(--color-border)",
+                    }}
+                    onClick={() => setAccountSearch("")}
+                  >
+                    清空关键词
+                  </button>
+                )}
               </div>
             )}
           </div>

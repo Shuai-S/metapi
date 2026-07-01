@@ -948,6 +948,8 @@ export default function Sites() {
     const requestedUrl = form.url.trim();
     const requestedPlatform = form.platform.trim();
     const requestedInitializationPresetId = selectedInitializationPresetId;
+    const requestedProxyUrl = form.proxyUrl.trim();
+    const requestedUseSystemProxy = !!form.useSystemProxy;
     if (!requestedUrl) {
       toast.error('请先输入 URL');
       return;
@@ -955,7 +957,10 @@ export default function Sites() {
     const requestedPrimarySiteUrl = analyzePrimarySiteUrl(requestedUrl);
     setDetecting(true);
     try {
-      const result = await api.detectSite(requestedUrl);
+      const result = await api.detectSite(requestedUrl, {
+        proxyUrl: requestedProxyUrl || null,
+        useSystemProxy: requestedUseSystemProxy,
+      });
       if (
         latestPrimarySiteUrlRef.current.trim() !== requestedUrl
         || latestPlatformRef.current.trim() !== requestedPlatform

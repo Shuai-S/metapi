@@ -1,4 +1,6 @@
 import { stripTrailingSlashes } from '../urlNormalization.js';
+import { withSiteRecordProxyRequestInit } from '../siteProxy.js';
+import type { PlatformDetectionContext } from './base.js';
 
 export type TitleHintPlatform =
   | 'anyrouter'
@@ -46,14 +48,23 @@ function extractHtmlTitle(html: string): string {
   return match[1].replace(/\s+/g, ' ').trim();
 }
 
-async function detectPlatformByTitleOnce(base: string): Promise<TitleHintPlatform | undefined> {
+async function detectPlatformByTitleOnce(
+  base: string,
+  context?: PlatformDetectionContext,
+): Promise<TitleHintPlatform | undefined> {
   try {
     const { fetch } = await import('undici');
-    const res = await fetch(`${base}/`, {
+    const requestInit = {
       method: 'GET',
       headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' },
       signal: AbortSignal.timeout(5000),
-    });
+    };
+    const res = await fetch(
+      `${base}/`,
+      context?.siteProxy
+        ? withSiteRecordProxyRequestInit(context.siteProxy, requestInit)
+        : requestInit,
+    );
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
     if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
       return undefined;
@@ -71,15 +82,18 @@ async function detectPlatformByTitleOnce(base: string): Promise<TitleHintPlatfor
   }
 }
 
-export async function detectPlatformByTitle(url: string): Promise<TitleHintPlatform | undefined> {
+export async function detectPlatformByTitle(
+  url: string,
+  context?: PlatformDetectionContext,
+): Promise<TitleHintPlatform | undefined> {
   const base = normalizeBaseUrl(url);
   if (!base) return undefined;
 
-  const first = await detectPlatformByTitleOnce(base);
+  const first = await detectPlatformByTitleOnce(base, context);
   if (first) return first;
 
   // Under heavy parallel test load, local title probes can occasionally race
   // with just-started ephemeral HTTP servers. Retry once before giving up.
   await new Promise((resolve) => setTimeout(resolve, 50));
-  return detectPlatformByTitleOnce(base);
+  return detectPlatformByTitleOnce(base, context);
 }

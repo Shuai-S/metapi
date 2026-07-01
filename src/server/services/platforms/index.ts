@@ -1,4 +1,4 @@
-import type { PlatformAdapter } from './base.js';
+import type { PlatformAdapter, PlatformDetectionContext } from './base.js';
 import { AnyRouterAdapter } from './anyrouter.js';
 import { NewApiAdapter } from './newApi.js';
 import { OneApiAdapter } from './oneApi.js';
@@ -51,19 +51,22 @@ const titleFirstPlatforms = new Set<string>([
   'sub2api',
 ]);
 
-export async function detectPlatform(url: string): Promise<PlatformAdapter | undefined> {
+export async function detectPlatform(
+  url: string,
+  context?: PlatformDetectionContext,
+): Promise<PlatformAdapter | undefined> {
   const urlHint = detectPlatformByUrlHint(url);
   if (urlHint) {
     return getAdapter(urlHint);
   }
 
-  const titleHint = await detectPlatformByTitle(url);
+  const titleHint = await detectPlatformByTitle(url, context);
   if (titleHint && titleFirstPlatforms.has(titleHint)) {
     return getAdapter(titleHint);
   }
 
   for (const adapter of adapters) {
-    if (await adapter.detect(url)) return adapter;
+    if (await adapter.detect(url, context)) return adapter;
   }
 
   if (titleHint) {

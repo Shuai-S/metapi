@@ -6,10 +6,12 @@ import {
   CreateApiTokenOptions,
   SubscriptionPlanSummary,
   SubscriptionSummary,
+  type PlatformDetectionContext,
   type SiteAnnouncement,
   UserInfo,
 } from './base.js';
 import { stripTrailingSlashes } from '../urlNormalization.js';
+import { withSiteRecordProxyRequestInit } from '../siteProxy.js';
 
 function normalizeBaseUrl(baseUrl: string): string {
   return stripTrailingSlashes(baseUrl || '');
@@ -542,7 +544,7 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
     return Number.isFinite(days) ? Math.min(days, 3650) : undefined;
   }
 
-  async detect(url: string): Promise<boolean> {
+  async detect(url: string, context?: PlatformDetectionContext): Promise<boolean> {
     const normalized = (url || '').toLowerCase();
     if (normalized.includes('sub2api')) return true;
 
@@ -550,10 +552,16 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
     const { fetch } = await import('undici');
     const probeEndpoint = async (path: string) => {
       try {
-        return await fetch(`${base}${path}`, {
+        const requestInit = {
           method: 'GET',
           signal: AbortSignal.timeout(5000),
-        });
+        };
+        return await fetch(
+          `${base}${path}`,
+          context?.siteProxy
+            ? withSiteRecordProxyRequestInit(context.siteProxy, requestInit)
+            : requestInit,
+        );
       } catch {
         return null;
       }
