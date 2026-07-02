@@ -146,4 +146,59 @@ describe('Accounts segmented connections view', () => {
       root?.unmount();
     }
   });
+
+  it('labels password-created session connections by their add type', async () => {
+    apiMock.getAccounts.mockResolvedValue([
+      {
+        id: 1,
+        username: 'token-user',
+        accessToken: 'session-token',
+        apiToken: 'sk-session',
+        status: 'active',
+        credentialMode: 'session',
+        capabilities: { canCheckin: true, canRefreshBalance: true, proxyOnly: false },
+        site: { id: 10, name: 'Session Site', platform: 'new-api', status: 'active', url: 'https://session.example.com' },
+      },
+      {
+        id: 2,
+        username: 'password-user',
+        accessToken: 'password-session-token',
+        apiToken: 'sk-password',
+        status: 'active',
+        credentialMode: 'session',
+        capabilities: { canCheckin: true, canRefreshBalance: true, proxyOnly: false },
+        extraConfig: JSON.stringify({
+          credentialMode: 'session',
+          autoRelogin: { username: 'password-user', passwordCipher: 'cipher' },
+        }),
+        site: { id: 10, name: 'Session Site', platform: 'new-api', status: 'active', url: 'https://session.example.com' },
+      },
+    ]);
+    apiMock.getSites.mockResolvedValue([
+      { id: 10, name: 'Session Site', platform: 'new-api', status: 'active' },
+    ]);
+    apiMock.getAccountTokens.mockResolvedValue([]);
+
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/accounts']}>
+            <ToastProvider>
+              <Accounts />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      const rendered = JSON.stringify(root.toJSON());
+      expect(rendered).toContain('token-user');
+      expect(rendered).toContain('password-user');
+      expect(rendered).toContain('Session');
+      expect(rendered).toContain('Password');
+    } finally {
+      root?.unmount();
+    }
+  });
 });

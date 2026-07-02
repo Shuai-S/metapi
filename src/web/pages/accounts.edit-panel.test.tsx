@@ -59,6 +59,27 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function selectModernOption(root: WebTestRenderer, testId: string, label: string) {
+  const select = root.root.findByProps({ 'data-testid': testId });
+  const trigger = select.find((node) => (
+    node.type === 'button'
+    && typeof node.props.className === 'string'
+    && node.props.className.includes('modern-select-trigger')
+  ));
+  await act(async () => {
+    trigger.props.onClick();
+  });
+  const option = select.findAll((node) => (
+    node.type === 'button'
+    && typeof node.props.className === 'string'
+    && node.props.className.includes('modern-select-option')
+    && collectText(node).includes(label)
+  ))[0];
+  await act(async () => {
+    option!.props.onClick();
+  });
+}
+
 describe('Accounts edit panel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -126,6 +147,139 @@ describe('Accounts edit panel', () => {
         && node.props.placeholder === '账号名称'
       ));
       expect(usernameInput.props.value).toBe('alpha');
+    } finally {
+      root?.unmount();
+    }
+  });
+
+  it('converts a session account to API Key from the edit panel', async () => {
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/accounts']}>
+            <ToastProvider>
+              <Accounts />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      const editButton = root.root.find((node) => (
+        node.type === 'button'
+        && typeof node.props.onClick === 'function'
+        && collectText(node).trim() === '编辑'
+      ));
+      await act(async () => {
+        editButton.props.onClick();
+      });
+      await flushMicrotasks();
+
+      await selectModernOption(root, 'edit-connection-type-select', 'API Key');
+
+      const apiKeyInput = root.root.find((node) => (
+        node.type === 'input'
+        && node.props.placeholder === 'API Key'
+      ));
+      await act(async () => {
+        apiKeyInput.props.onChange({ target: { value: 'sk-converted' } });
+      });
+
+      const saveButton = root.root.find((node) => (
+        node.type === 'button'
+        && typeof node.props.onClick === 'function'
+        && collectText(node).trim() === '保存修改'
+      ));
+      await act(async () => {
+        await saveButton.props.onClick();
+      });
+      await flushMicrotasks();
+
+      expect(apiMock.updateAccount).toHaveBeenCalledTimes(1);
+      const [, payload] = apiMock.updateAccount.mock.calls[0]!;
+      expect(payload).toMatchObject({
+        accessToken: '',
+        apiToken: 'sk-converted',
+        checkinEnabled: false,
+      });
+      const extraConfig = JSON.parse(payload.extraConfig);
+      expect(extraConfig.credentialMode).toBe('apikey');
+      expect(extraConfig.autoRelogin).toBeUndefined();
+    } finally {
+      root?.unmount();
+    }
+  });
+
+  it('sends password when converting an API Key account to Password', async () => {
+    apiMock.getAccounts.mockResolvedValue([
+      {
+        id: 1,
+        siteId: 1,
+        username: 'alpha',
+        accessToken: '',
+        apiToken: 'sk-old',
+        status: 'active',
+        checkinEnabled: false,
+        credentialMode: 'apikey',
+        capabilities: { canCheckin: false, canRefreshBalance: false, proxyOnly: true },
+        site: { id: 1, name: 'Site A', status: 'active', platform: 'new-api' },
+      },
+    ]);
+
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/accounts?segment=apikey']}>
+            <ToastProvider>
+              <Accounts />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      const editButton = root.root.find((node) => (
+        node.type === 'button'
+        && typeof node.props.onClick === 'function'
+        && collectText(node).trim() === '编辑'
+      ));
+      await act(async () => {
+        editButton.props.onClick();
+      });
+      await flushMicrotasks();
+
+      await selectModernOption(root, 'edit-connection-type-select', 'Password');
+
+      const passwordInput = root.root.find((node) => (
+        node.type === 'input'
+        && node.props.type === 'password'
+        && String(node.props.placeholder || '').includes('Password')
+      ));
+      await act(async () => {
+        passwordInput.props.onChange({ target: { value: 'new-password' } });
+      });
+
+      const saveButton = root.root.find((node) => (
+        node.type === 'button'
+        && typeof node.props.onClick === 'function'
+        && collectText(node).trim() === '保存修改'
+      ));
+      await act(async () => {
+        await saveButton.props.onClick();
+      });
+      await flushMicrotasks();
+
+      expect(apiMock.updateAccount).toHaveBeenCalledTimes(1);
+      const [, payload] = apiMock.updateAccount.mock.calls[0]!;
+      expect(payload).toMatchObject({
+        password: 'new-password',
+        accessToken: '',
+        apiToken: 'sk-old',
+      });
+      const extraConfig = JSON.parse(payload.extraConfig);
+      expect(extraConfig.credentialMode).toBe('session');
     } finally {
       root?.unmount();
     }
@@ -318,5 +472,4 @@ describe('Accounts edit panel', () => {
     }
   });
 });
-
 

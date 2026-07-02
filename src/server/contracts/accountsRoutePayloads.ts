@@ -19,6 +19,7 @@ const accountCreatePayloadSchema = z.object({
 
 const accountUpdatePayloadSchema = z.object({
   username: z.string().optional(),
+  password: z.string().optional(),
   remark: z.union([z.string(), z.null()]).optional(),
   accessToken: z.string().optional(),
   apiToken: z.union([z.string(), z.null()]).optional(),

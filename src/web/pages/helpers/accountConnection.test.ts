@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isTruthyFlag,
   parsePositiveInt,
+  resolveAccountConnectionDisplay,
   resolveAccountCredentialMode,
 } from './accountConnection.js';
 
@@ -16,6 +17,30 @@ describe('accountConnection helpers', () => {
       accessToken: 'api-token-ignored-by-explicit-mode',
     })).toBe('session');
     expect(resolveAccountCredentialMode({})).toBe('apikey');
+  });
+
+  it('resolves connection display type separately from routing mode', () => {
+    expect(resolveAccountConnectionDisplay({ credentialMode: 'apikey' })).toMatchObject({
+      type: 'apikey',
+      label: 'API Key',
+      badgeClass: 'badge-warning',
+    });
+    expect(resolveAccountConnectionDisplay({ credentialMode: 'session' })).toMatchObject({
+      type: 'session',
+      label: 'Session',
+      badgeClass: 'badge-info',
+    });
+    expect(resolveAccountConnectionDisplay({
+      credentialMode: 'session',
+      extraConfig: JSON.stringify({
+        credentialMode: 'session',
+        autoRelogin: { username: 'demo', passwordCipher: 'cipher' },
+      }),
+    })).toMatchObject({
+      type: 'password',
+      label: 'Password',
+      badgeClass: 'badge-success',
+    });
   });
 
   it('parses positive integers from query values', () => {

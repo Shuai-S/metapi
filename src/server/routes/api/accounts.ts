@@ -1476,6 +1476,129 @@ export async function accountsRoutes(app: FastifyInstance) {
       const normalizedRemark = normalizeOptionalRemark(body.remark);
       if (normalizedRemark.present) updates.remark = normalizedRemark.remark;
 
+      const requestedPassword =
+        typeof body.password === "string" ? body.password.trim() : "";
+      if (requestedPassword) {
+        const nextUsername =
+          typeof updates.username === "string"
+            ? updates.username.trim()
+            : String(account.username || "").trim();
+        if (!nextUsername) {
+          return reply
+            .code(400)
+            .send({ message: "Password login requires username." });
+        }
+
+        const adapter = getAdapter(site.platform);
+        if (!adapter) {
+          return reply
+            .code(400)
+            .send({
+              message: `platform not supported: ${site.platform}`,
+            });
+        }
+
+        const loginResult = await adapter.login(
+          site.url,
+          nextUsername,
+          requestedPassword,
+        );
+        if (!loginResult.success || !loginResult.accessToken) {
+          const normalizedFailure = normalizeLoginFailure(loginResult.message);
+          return reply.code(400).send({
+            success: false,
+            shieldBlocked: normalizedFailure.shieldBlocked,
+            message: normalizedFailure.message,
+          });
+        }
+
+        const guessedPlatformUserId =
+          guessPlatformUserIdFromUsername(nextUsername);
+        let apiToken: string | null = null;
+        let apiTokens: Array<{
+          name?: string | null;
+          key?: string | null;
+          enabled?: boolean | null;
+        }> = [];
+        try {
+          apiToken = await adapter.getApiToken(
+            site.url,
+            loginResult.accessToken,
+            guessedPlatformUserId,
+          );
+        } catch {}
+        try {
+          apiTokens = await adapter.getApiTokens(
+            site.url,
+            loginResult.accessToken,
+            guessedPlatformUserId,
+          );
+        } catch {}
+
+        const preferredApiToken =
+          apiTokens.find((token) => token.enabled !== false && token.key)?.key ||
+          apiToken ||
+          null;
+        const baseExtraConfig =
+          typeof updates.extraConfig === "string"
+            ? updates.extraConfig
+            : account.extraConfig;
+        const extraConfigPatch: Record<string, unknown> = {
+          credentialMode: "session",
+          autoRelogin: {
+            username: nextUsername,
+            passwordCipher: encryptAccountPassword(requestedPassword),
+            updatedAt: new Date().toISOString(),
+          },
+        };
+        if (guessedPlatformUserId) {
+          extraConfigPatch.platformUserId = guessedPlatformUserId;
+        }
+        const normalizedLoginPlatform = String(
+          adapter.platformName || site.platform || "",
+        )
+          .trim()
+          .toLowerCase();
+        if (normalizedLoginPlatform === "sub2api") {
+          if (loginResult.refreshToken) {
+            const sub2apiAuth: Record<string, unknown> = {
+              refreshToken: loginResult.refreshToken,
+            };
+            if (
+              typeof loginResult.tokenExpiresAt === "number" &&
+              Number.isFinite(loginResult.tokenExpiresAt) &&
+              loginResult.tokenExpiresAt > 0
+            ) {
+              sub2apiAuth.tokenExpiresAt = Math.trunc(
+                loginResult.tokenExpiresAt,
+              );
+            }
+            extraConfigPatch.sub2apiAuth = sub2apiAuth;
+          } else {
+            extraConfigPatch.sub2apiAuth = undefined;
+          }
+        }
+
+        updates.accessToken = loginResult.accessToken;
+        if (preferredApiToken) {
+          updates.apiToken = preferredApiToken;
+        } else if (
+          typeof updates.apiToken === "string" &&
+          updates.apiToken.trim()
+        ) {
+          updates.apiToken = updates.apiToken.trim();
+        } else {
+          updates.apiToken = null;
+        }
+        if (updates.status === undefined) {
+          updates.status = "active";
+        }
+        updates.extraConfig = mergeAccountExtraConfig(
+          baseExtraConfig,
+          extraConfigPatch,
+        );
+      }
+
       const wantsManagedSub2ApiAuthPatch =
         Object.prototype.hasOwnProperty.call(body, "refreshToken") ||
         Object.prototype.hasOwnProperty.call(body, "tokenExpiresAt");

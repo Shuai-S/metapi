@@ -20,6 +20,7 @@ import {
 import {
   isTruthyFlag,
   parsePositiveInt,
+  resolveAccountConnectionDisplay,
   resolveAccountCredentialMode,
 } from "./helpers/accountConnection.js";
 import {
@@ -39,6 +40,7 @@ import { getSiteInitializationPreset } from "../../shared/siteInitializationPres
 import { parseBatchApiKeys } from "../../shared/apiKeyBatch.js";
 
 type ConnectionsSegment = "session" | "apikey" | "tokens";
+type EditableConnectionType = "session" | "apikey" | "password";
 
 const ACCOUNT_SEGMENTS: Array<{
   value: ConnectionsSegment;
@@ -150,7 +152,9 @@ export default function Accounts() {
   }>(null);
   const [editingAccount, setEditingAccount] = useState<any | null>(null);
   const [editForm, setEditForm] = useState({
+    connectionType: "session" as EditableConnectionType,
     username: "",
+    password: "",
     status: "active",
     checkinEnabled: true,
     unitCost: "",
@@ -307,6 +311,7 @@ export default function Accounts() {
     ).filter((account) => {
       if (!normalizedQuery) return true;
       const credentialMode = resolveAccountCredentialMode(account);
+      const connectionDisplay = resolveAccountConnectionDisplay(account);
       const status = String(account?.status || "");
       const site = account?.site || {};
       const runtimeHealth = account?.runtimeHealth || {};
@@ -318,7 +323,9 @@ export default function Accounts() {
         account?.username,
         account?.remark,
         credentialMode,
-        credentialMode === "apikey" ? "api key API Key API Key连接" : "session Session Session连接",
+        connectionDisplay.type,
+        connectionDisplay.label,
+        connectionDisplay.searchText,
         status,
         status === "expired" ? "已过期 过期" : "",
         status === "disabled" ? "已禁用 禁用" : "",
@@ -351,6 +358,13 @@ export default function Accounts() {
     visibleAccounts.every((account) => selectedAccountIds.includes(account.id));
   const verifyFailureHint = buildVerifyFailureHint(verifyResult);
   const addAccountPrereqHint = buildAddAccountPrereqHint(verifyResult);
+  const editingOriginalConnectionType = editingAccount
+    ? resolveAccountConnectionDisplay(editingAccount).type
+    : "session";
+  const editPasswordPlaceholder =
+    editingOriginalConnectionType === "password"
+      ? "账号密码（留空则保留已保存密码）"
+      : "账号密码（转换为 Password 必填）";
 
   const setSegment = (nextSegment: ConnectionsSegment) => {
     const params = new URLSearchParams(location.search);
@@ -980,11 +994,14 @@ export default function Accounts() {
   const openEditPanel = (account: any) => {
     const managedAuth = extractManagedSub2ApiAuth(account);
     const proxyUrl = parseAccountExtraConfig(account)?.proxyUrl || "";
+    const connectionDisplay = resolveAccountConnectionDisplay(account);
     closeAddPanel();
     setRebindTarget(null);
     setEditingAccount(account);
     setEditForm({
+      connectionType: connectionDisplay.type,
       username: account?.username || "",
+      password: "",
       status: account?.status || "active",
       checkinEnabled: account?.checkinEnabled !== false,
       unitCost:
@@ -1008,18 +1025,71 @@ export default function Accounts() {
 
   const saveEditPanel = async () => {
     if (!editingAccount) return;
+    const connectionType = editForm.connectionType;
+    const username = editForm.username.trim();
+    const password = editForm.password.trim();
+    const accessToken = editForm.accessToken.trim();
+    const apiToken = editForm.apiToken.trim();
+    const existingExtraConfig = parseAccountExtraConfig(editingAccount);
+    const autoRelogin = existingExtraConfig.autoRelogin;
+    const storedReloginUsername =
+      autoRelogin &&
+      typeof autoRelogin === "object" &&
+      !Array.isArray(autoRelogin)
+        ? String(autoRelogin.username || "").trim()
+        : "";
+    const hasStoredPassword = editingOriginalConnectionType === "password";
+    const passwordUsernameChanged =
+      hasStoredPassword &&
+      !!storedReloginUsername &&
+      username !== storedReloginUsername;
+
+    if (connectionType === "apikey" && !apiToken) {
+      toast.error("转换为 API Key 类型需要填写 API Key");
+      return;
+    }
+    if (connectionType === "session" && !accessToken) {
+      toast.error("转换为 Session 类型需要填写 Access Token");
+      return;
+    }
+    if (connectionType === "password") {
+      if (!username) {
+        toast.error("Password 类型需要填写账号名称");
+        return;
+      }
+      if (!password && (!hasStoredPassword || passwordUsernameChanged)) {
+        toast.error("转换为 Password 类型需要填写账号密码");
+        return;
+      }
+      if (!password && !accessToken) {
+        toast.error("Password 类型需要 Access Token，或填写密码重新登录");
+        return;
+      }
+    }
+
+    const nextExtraConfig: Record<string, any> = {
+      ...existingExtraConfig,
+      credentialMode: connectionType === "apikey" ? "apikey" : "session",
+    };
+    if (connectionType !== "password") {
+      delete nextExtraConfig.autoRelogin;
+    }
+
     setSavingEdit(true);
     try {
       await api.updateAccount(editingAccount.id, {
-        username: editForm.username.trim() || undefined,
+        username: username || undefined,
+        ...(connectionType === "password" && password ? { password } : {}),
         status: editForm.status,
-        checkinEnabled: editForm.checkinEnabled,
+        checkinEnabled:
+          connectionType === "apikey" ? false : editForm.checkinEnabled,
         unitCost: editForm.unitCost.trim()
           ? Number(editForm.unitCost.trim())
           : null,
         remark: editForm.remark.trim() || null,
-        accessToken: editForm.accessToken.trim(),
-        apiToken: editForm.apiToken.trim() || null,
+        accessToken: connectionType === "apikey" ? "" : accessToken,
+        apiToken: apiToken || null,
+        extraConfig: JSON.stringify(nextExtraConfig),
         isPinned: editForm.isPinned,
         refreshToken: editForm.refreshToken.trim() || null,
         tokenExpiresAt: editForm.tokenExpiresAt.trim()
@@ -2745,6 +2815,40 @@ export default function Accounts() {
                   style={inputStyle}
                 />
                 <ModernSelect
+                  data-testid="edit-connection-type-select"
+                  value={editForm.connectionType}
+                  onChange={(value) => {
+                    const nextType: EditableConnectionType =
+                      value === "apikey" || value === "password"
+                        ? value
+                        : "session";
+                    setEditForm((prev) => ({
+                      ...prev,
+                      connectionType: nextType,
+                      checkinEnabled:
+                        nextType === "apikey" ? false : prev.checkinEnabled,
+                    }));
+                  }}
+                  options={[
+                    {
+                      value: "session",
+                      label: "Session",
+                      description: "使用 Access Token / Cookie",
+                    },
+                    {
+                      value: "apikey",
+                      label: "API Key",
+                      description: "仅用于代理调用",
+                    },
+                    {
+                      value: "password",
+                      label: "Password",
+                      description: "使用账号密码重新登录并自动续期",
+                    },
+                  ]}
+                  placeholder="连接类型"
+                />
+                <ModernSelect
                   value={editForm.status}
                   onChange={(value) =>
                     setEditForm((prev) => ({ ...prev, status: value }))
@@ -2792,7 +2896,12 @@ export default function Accounts() {
                 >
                   <input
                     type="checkbox"
-                    checked={editForm.checkinEnabled}
+                    checked={
+                      editForm.connectionType === "apikey"
+                        ? false
+                        : editForm.checkinEnabled
+                    }
+                    disabled={editForm.connectionType === "apikey"}
                     onChange={(e) =>
                       setEditForm((prev) => ({
                         ...prev,
@@ -2800,21 +2909,29 @@ export default function Accounts() {
                       }))
                     }
                   />
-                  启用签到
+                  {editForm.connectionType === "apikey"
+                    ? "API Key 连接不支持签到"
+                    : "启用签到"}
                 </label>
+                {editForm.connectionType !== "apikey" && (
+                  <input
+                    placeholder="Access Token"
+                    value={editForm.accessToken}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({
+                        ...prev,
+                        accessToken: e.target.value,
+                      }))
+                    }
+                    style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                  />
+                )}
                 <input
-                  placeholder="Access Token"
-                  value={editForm.accessToken}
-                  onChange={(e) =>
-                    setEditForm((prev) => ({
-                      ...prev,
-                      accessToken: e.target.value,
-                    }))
+                  placeholder={
+                    editForm.connectionType === "apikey"
+                      ? "API Key"
+                      : "API Token（可选）"
                   }
-                  style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
-                />
-                <input
-                  placeholder="API Token（可选）"
                   value={editForm.apiToken}
                   onChange={(e) =>
                     setEditForm((prev) => ({
@@ -2824,6 +2941,20 @@ export default function Accounts() {
                   }
                   style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
                 />
+                {editForm.connectionType === "password" && (
+                  <input
+                    type="password"
+                    placeholder={editPasswordPlaceholder}
+                    value={editForm.password}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({
+                        ...prev,
+                        password: e.target.value,
+                      }))
+                    }
+                    style={inputStyle}
+                  />
+                )}
                 <input
                   placeholder="代理地址（可选，如 http://127.0.0.1:7890）"
                   value={editForm.proxyUrl}
@@ -2846,7 +2977,8 @@ export default function Accounts() {
                   协议。
                 </div>
                 {(editingAccount?.site?.platform || "").toLowerCase() ===
-                  "sub2api" && (
+                  "sub2api" &&
+                  editForm.connectionType !== "apikey" && (
                   <>
                     <input
                       placeholder="Sub2API refresh_token（可选）"
@@ -2882,7 +3014,7 @@ export default function Accounts() {
                 <div className="mobile-card-list">
                   {visibleAccounts.map((a: any) => {
                     const capabilities = resolveAccountCapabilities(a);
-                    const connectionMode = resolveAccountCredentialMode(a);
+                    const connectionDisplay = resolveAccountConnectionDisplay(a);
                     const health = resolveRuntimeHealth(a);
                     const isExpanded = expandedAccountIds.includes(a.id);
                     const hintMessage =
@@ -2913,12 +3045,10 @@ export default function Accounts() {
                               }
                             />
                             <span
-                              className={`badge ${connectionMode === "apikey" ? "badge-warning" : "badge-info"}`}
+                              className={`badge ${connectionDisplay.badgeClass}`}
                               style={{ fontSize: 10 }}
                             >
-                              {connectionMode === "apikey"
-                                ? "API Key"
-                                : "Session"}
+                              {connectionDisplay.label}
                             </span>
                             {parseAccountExtraConfig(a)?.proxyUrl && (
                               <span
@@ -3258,7 +3388,7 @@ export default function Accounts() {
                   <tbody>
                     {visibleAccounts.map((a: any, i: number) => {
                       const capabilities = resolveAccountCapabilities(a);
-                      const connectionMode = resolveAccountCredentialMode(a);
+                      const connectionDisplay = resolveAccountConnectionDisplay(a);
                       return (
                         <tr
                           key={a.id}
@@ -3304,12 +3434,10 @@ export default function Accounts() {
                               style={{ display: "flex", gap: 4, marginTop: 4 }}
                             >
                               <span
-                                className={`badge ${connectionMode === "apikey" ? "badge-warning" : "badge-info"}`}
+                                className={`badge ${connectionDisplay.badgeClass}`}
                                 style={{ fontSize: 10 }}
                               >
-                                {connectionMode === "apikey"
-                                  ? "API Key"
-                                  : "Session"}
+                                {connectionDisplay.label}
                               </span>
                               {parseAccountExtraConfig(a)?.proxyUrl && (
                                 <span

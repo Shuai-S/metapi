@@ -6,13 +6,17 @@ import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 
 const verifyTokenMock = vi.fn();
+const loginMock = vi.fn();
 const getModelsMock = vi.fn();
+const getApiTokenMock = vi.fn();
 const getApiTokensMock = vi.fn();
 
 vi.mock('../../services/platforms/index.js', () => ({
   getAdapter: () => ({
     verifyToken: (...args: unknown[]) => verifyTokenMock(...args),
+    login: (...args: unknown[]) => loginMock(...args),
     getModels: (...args: unknown[]) => getModelsMock(...args),
+    getApiToken: (...args: unknown[]) => getApiTokenMock(...args),
     getApiTokens: (...args: unknown[]) => getApiTokensMock(...args),
   }),
 }));
@@ -41,8 +45,11 @@ describe('accounts credential mode', { timeout: 15_000 }, () => {
 
   beforeEach(async () => {
     verifyTokenMock.mockReset();
+    loginMock.mockReset();
     getModelsMock.mockReset();
+    getApiTokenMock.mockReset();
     getApiTokensMock.mockReset();
+    getApiTokenMock.mockResolvedValue(null);
     getApiTokensMock.mockResolvedValue([]);
 
     await db.delete(schema.proxyLogs).run();
@@ -489,6 +496,69 @@ describe('accounts credential mode', { timeout: 15_000 }, () => {
       isPinned: false,
     });
     expect(JSON.parse(updated?.extraConfig || '{}')).not.toHaveProperty('proxyUrl');
+  });
+
+  it('converts an existing account to password login via account update API', async () => {
+    loginMock.mockResolvedValueOnce({
+      success: true,
+      accessToken: 'session-from-password',
+    });
+    getApiTokenMock.mockResolvedValueOnce('sk-single');
+    getApiTokensMock.mockResolvedValueOnce([
+      { name: 'primary', key: 'sk-from-list', enabled: true },
+    ]);
+    getModelsMock.mockResolvedValue(['gpt-4o-mini']);
+
+    const site = await db.insert(schema.sites).values({
+      name: 'Password Convert Site',
+      url: 'https://password-convert.example.com',
+      platform: 'new-api',
+    }).returning().get();
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'before-password',
+      accessToken: '',
+      apiToken: 'sk-old',
+      status: 'active',
+      checkinEnabled: false,
+      extraConfig: JSON.stringify({ credentialMode: 'apikey' }),
+    }).returning().get();
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/api/accounts/${account.id}`,
+      payload: {
+        username: 'after-password',
+        password: 'demo-password',
+        checkinEnabled: true,
+        extraConfig: JSON.stringify({ credentialMode: 'session' }),
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(loginMock).toHaveBeenCalledWith(
+      'https://password-convert.example.com',
+      'after-password',
+      'demo-password',
+    );
+
+    const accounts = await db.select().from(schema.accounts).all();
+    expect(accounts).toHaveLength(1);
+    const updated = accounts[0]!;
+    expect(updated).toMatchObject({
+      id: account.id,
+      username: 'after-password',
+      accessToken: 'session-from-password',
+      apiToken: 'sk-from-list',
+      checkinEnabled: true,
+    });
+    const parsedExtra = JSON.parse(updated.extraConfig || '{}') as {
+      credentialMode?: string;
+      autoRelogin?: { username?: string; passwordCipher?: string };
+    };
+    expect(parsedExtra.credentialMode).toBe('session');
+    expect(parsedExtra.autoRelogin?.username).toBe('after-password');
+    expect(parsedExtra.autoRelogin?.passwordCipher).toBeTruthy();
   });
 
   it('does not refresh models for pin-only account edits', async () => {
