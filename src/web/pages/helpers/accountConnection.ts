@@ -54,9 +54,9 @@ export function resolveAccountConnectionDisplay(account: any): AccountConnection
   if (credentialMode === 'apikey') {
     return {
       type: 'apikey',
-      label: 'API Key',
+      label: 'API Token',
       badgeClass: 'badge-warning',
-      searchText: 'apikey api key API Key API Key连接',
+      searchText: 'apitoken api token API Token api key API Key 模型调用凭证 API Token连接',
     };
   }
   if (hasPasswordReloginConfig(account)) {
@@ -69,9 +69,9 @@ export function resolveAccountConnectionDisplay(account: any): AccountConnection
   }
   return {
     type: 'session',
-    label: 'Session',
+    label: 'Session Token',
     badgeClass: 'badge-info',
-    searchText: 'session Session Session连接 access token cookie',
+    searchText: 'session Session Session Token Session连接 access token Access Token 系统访问令牌 cookie',
   };
 }
 

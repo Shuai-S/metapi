@@ -152,7 +152,7 @@ describe('Accounts edit panel', () => {
     }
   });
 
-  it('converts a session account to API Key from the edit panel', async () => {
+  it('converts a session account to API Token from the edit panel', async () => {
     let root!: WebTestRenderer;
     try {
       await act(async () => {
@@ -176,11 +176,11 @@ describe('Accounts edit panel', () => {
       });
       await flushMicrotasks();
 
-      await selectModernOption(root, 'edit-connection-type-select', 'API Key');
+      await selectModernOption(root, 'edit-connection-type-select', 'API Token');
 
       const apiKeyInput = root.root.find((node) => (
         node.type === 'input'
-        && node.props.placeholder === 'API Key'
+        && node.props.placeholder === '粘贴上游 API Token'
       ));
       await act(async () => {
         apiKeyInput.props.onChange({ target: { value: 'sk-converted' } });
@@ -211,7 +211,7 @@ describe('Accounts edit panel', () => {
     }
   });
 
-  it('sends password when converting an API Key account to Password', async () => {
+  it('sends password when converting an API Token account to Password', async () => {
     apiMock.getAccounts.mockResolvedValue([
       {
         id: 1,
@@ -275,9 +275,9 @@ describe('Accounts edit panel', () => {
       const [, payload] = apiMock.updateAccount.mock.calls[0]!;
       expect(payload).toMatchObject({
         password: 'new-password',
-        accessToken: '',
-        apiToken: 'sk-old',
       });
+      expect(payload).not.toHaveProperty('accessToken');
+      expect(payload).not.toHaveProperty('apiToken');
       const extraConfig = JSON.parse(payload.extraConfig);
       expect(extraConfig.credentialMode).toBe('session');
     } finally {
@@ -472,4 +472,3 @@ describe('Accounts edit panel', () => {
     }
   });
 });
-

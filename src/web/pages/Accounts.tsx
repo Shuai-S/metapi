@@ -58,7 +58,7 @@ const ACCOUNT_SEGMENTS: Array<{
   },
   {
     value: "apikey",
-    label: "API Key管理",
+    label: "API Token管理",
     tooltip: "只有 Base URL + Key 时使用，只负责代理调用",
     tooltipSide: "bottom",
     tooltipAlign: "center",
@@ -290,7 +290,7 @@ export default function Accounts() {
       typeof account?.username === "string" ? account.username.trim() : "";
     if (username) return username;
     return resolveAccountCredentialMode(account) === "apikey"
-      ? "API Key 连接"
+      ? "API Token 连接"
       : "未命名";
   };
 
@@ -449,8 +449,8 @@ export default function Accounts() {
       if (result.success) {
         closeAddPanel();
         const msg = result.apiTokenFound
-          ? `账号 "${loginForm.username}" 已添加，API Key 已自动获取`
-          : `账号 "${loginForm.username}" 已添加（未找到 API Key，请手动设置）`;
+          ? `账号 "${loginForm.username}" 已添加，API Token 已自动获取`
+          : `账号 "${loginForm.username}" 已添加（未找到 API Token，请手动设置）`;
         toast.success(msg);
         load(true);
       } else {
@@ -467,7 +467,7 @@ export default function Accounts() {
     if (!tokenForm.siteId || !tokenForm.accessToken) return;
     if (isBatchApiKeyInput) {
       toast.info(
-        `检测到 ${parsedApiKeys.length} 个 API Key，批量模式会在添加时逐条校验`,
+        `检测到 ${parsedApiKeys.length} 个 API Token，批量模式会在添加时逐条校验`,
       );
       return;
     }
@@ -487,7 +487,7 @@ export default function Accounts() {
       if (result.success) {
         if (result.tokenType === "apikey") {
           toast.success(
-            `API Key 验证成功（可用模型 ${result.modelCount || 0} 个）`,
+            `API Token 验证成功（可用模型 ${result.modelCount || 0} 个）`,
           );
         } else {
           toast.success(
@@ -584,11 +584,11 @@ export default function Accounts() {
       if (result.queued) {
         toast.info(result.message || "账号已添加，后台正在同步初始化信息。");
       } else if (result.tokenType === "apikey") {
-        toast.success("已添加为 API Key 账号（可用于代理转发）");
+        toast.success("已添加为 API Token 账号（可用于代理转发）");
       } else {
         const parts: string[] = [];
         if (result.usernameDetected) parts.push("用户名已自动识别");
-        if (result.apiTokenFound) parts.push("API Key 已自动获取");
+        if (result.apiTokenFound) parts.push("API Token 已自动获取");
         const extra = parts.length ? `（${parts.join("，")}）` : "";
         toast.success(`账号已添加${extra}`);
       }
@@ -638,7 +638,7 @@ export default function Accounts() {
   const formatModelFailure = (refresh: any, messageFallback?: string) => {
     const code = refresh?.errorCode;
     if (code === "timeout") return "模型获取失败（请求超时）";
-    if (code === "unauthorized") return "模型获取失败，API Key 已无效";
+    if (code === "unauthorized") return "模型获取失败，API Token 已无效";
     if (code === "empty_models") return "模型获取失败：未获取到可用模型";
     return messageFallback || refresh?.errorMessage || "模型获取失败";
   };
@@ -1009,7 +1009,10 @@ export default function Accounts() {
           ? ""
           : String(account.unitCost),
       remark: account?.remark || "",
-      accessToken: account?.accessToken || "",
+      accessToken:
+        connectionDisplay.type === "apikey"
+          ? account?.apiToken || account?.accessToken || ""
+          : account?.accessToken || "",
       apiToken: account?.apiToken || "",
       isPinned: !!account?.isPinned,
       refreshToken: managedAuth.refreshToken,
@@ -1044,8 +1047,8 @@ export default function Accounts() {
       !!storedReloginUsername &&
       username !== storedReloginUsername;
 
-    if (connectionType === "apikey" && !apiToken) {
-      toast.error("转换为 API Key 类型需要填写 API Key");
+    if (connectionType === "apikey" && !accessToken) {
+      toast.error("转换为 API Token 类型需要填写上游 API Token");
       return;
     }
     if (connectionType === "session" && !accessToken) {
@@ -1061,10 +1064,6 @@ export default function Accounts() {
         toast.error("转换为 Password 类型需要填写账号密码");
         return;
       }
-      if (!password && !accessToken) {
-        toast.error("Password 类型需要 Access Token，或填写密码重新登录");
-        return;
-      }
     }
 
     const nextExtraConfig: Record<string, any> = {
@@ -1077,7 +1076,7 @@ export default function Accounts() {
 
     setSavingEdit(true);
     try {
-      await api.updateAccount(editingAccount.id, {
+      const payload: Record<string, any> = {
         username: username || undefined,
         ...(connectionType === "password" && password ? { password } : {}),
         status: editForm.status,
@@ -1087,16 +1086,28 @@ export default function Accounts() {
           ? Number(editForm.unitCost.trim())
           : null,
         remark: editForm.remark.trim() || null,
-        accessToken: connectionType === "apikey" ? "" : accessToken,
-        apiToken: apiToken || null,
         extraConfig: JSON.stringify(nextExtraConfig),
         isPinned: editForm.isPinned,
-        refreshToken: editForm.refreshToken.trim() || null,
-        tokenExpiresAt: editForm.tokenExpiresAt.trim()
-          ? Number.parseInt(editForm.tokenExpiresAt.trim(), 10)
-          : null,
         proxyUrl: editForm.proxyUrl.trim() || null,
-      });
+      };
+      if (connectionType === "apikey") {
+        payload.accessToken = "";
+        payload.apiToken = accessToken;
+      } else if (connectionType === "session") {
+        payload.accessToken = accessToken;
+        payload.apiToken = apiToken || null;
+      }
+      if (
+        (editingAccount?.site?.platform || "").toLowerCase() === "sub2api" &&
+        connectionType !== "apikey"
+      ) {
+        payload.refreshToken = editForm.refreshToken.trim() || null;
+        payload.tokenExpiresAt = editForm.tokenExpiresAt.trim()
+          ? Number.parseInt(editForm.tokenExpiresAt.trim(), 10)
+          : null;
+      }
+
+      await api.updateAccount(editingAccount.id, payload);
       toast.success("账号已更新");
       closeEditPanel();
       load(true);
@@ -1252,7 +1263,7 @@ export default function Accounts() {
       if (result.success && result.tokenType === "session") {
         toast.success("Session Token 验证成功，可以重新绑定");
       } else if (result.success && result.tokenType !== "session") {
-        toast.error("当前是 API Key，不是 Session Token");
+        toast.error("当前是 API Token，不是 Session Token");
       } else {
         toast.error(
           normalizeVerifyFailureMessage(result.message || "Token 无效"),
@@ -1694,7 +1705,7 @@ export default function Accounts() {
             onClose={closeAddPanel}
             title={
               activeSegment === "apikey"
-                ? "添加 API Key 连接"
+                ? "添加 API Token 连接"
                 : addMode === "login"
                   ? "账号密码登录"
                   : "添加 Session 连接"
@@ -2035,7 +2046,7 @@ export default function Accounts() {
                               </div>
                             )}
                             <div>
-                              API Key:{" "}
+                              API Token:{" "}
                               <span
                                 style={{
                                   fontWeight: 500,
@@ -2057,7 +2068,7 @@ export default function Accounts() {
                       verifyResult.tokenType === "apikey" && (
                         <div className="alert alert-warning animate-scale-in">
                           <div className="alert-title">
-                            当前分段仅接受 Session 凭证，请切到「API Key
+                            当前分段仅接受 Session 凭证，请切到「API Token
                             连接」分段创建。
                           </div>
                         </div>
@@ -2160,7 +2171,7 @@ export default function Accounts() {
                     }}
                   >
                     <div className="info-tip">
-                      输入目标站点的账号密码，将自动登录并获取访问令牌和 API Key
+                      输入目标站点的账号密码，将自动登录并获取访问令牌和 API Token
                     </div>
                     <ModernSelect
                       value={String(loginForm.siteId || 0)}
@@ -2246,9 +2257,9 @@ export default function Accounts() {
                 style={{ display: "flex", flexDirection: "column", gap: 12 }}
               >
                 <div className="info-tip">
-                  API Key
+                  API Token
                   连接只用于代理转发，不会自动派生账号令牌。系统会按站点平台能力自动引导到
-                  Session 或 API Key 创建流程。
+                  Session 或 API Token 创建流程。
                 </div>
                 {createIntentPreset && (
                   <div className="alert alert-info animate-scale-in">
@@ -2351,7 +2362,7 @@ export default function Accounts() {
                   }}
                 />
                 <textarea
-                  placeholder="粘贴 API Key"
+                  placeholder="粘贴 API Token"
                   value={tokenForm.accessToken}
                   onChange={(e) => {
                     setTokenForm((f) => ({
@@ -2372,14 +2383,14 @@ export default function Accounts() {
                   <div
                     style={{ fontSize: 12, color: "var(--color-text-muted)" }}
                   >
-                    已识别 {parsedApiKeys.length} 个 API Key
+                    已识别 {parsedApiKeys.length} 个 API Token
                     {isBatchApiKeyInput
                       ? "，添加时会逐条创建同站点连接并参与轮询"
                       : ""}
                   </div>
                 )}
                 <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-                  支持换行、空格、逗号批量粘贴多个 API Key。
+                  支持换行、空格、逗号批量粘贴多个 API Token。
                 </div>
                 <div
                   style={{ display: "flex", flexDirection: "column", gap: 4 }}
@@ -2424,7 +2435,7 @@ export default function Accounts() {
                     }
                     style={{ width: 14, height: 14 }}
                   />
-                  <span>跳过模型验证（直接添加 API Key）</span>
+                  <span>跳过模型验证（直接添加 API Token）</span>
                 </label>
                 {verifyResult &&
                   verifyResult.success &&
@@ -2452,7 +2463,7 @@ export default function Accounts() {
                             d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"
                           />
                         </svg>
-                        API Key 验证成功
+                        API Token 验证成功
                       </div>
                       <div style={{ fontSize: 12, lineHeight: 1.8 }}>
                         <div>
@@ -2473,7 +2484,7 @@ export default function Accounts() {
                   verifyResult.tokenType === "session" && (
                     <div className="alert alert-warning animate-scale-in">
                       <div className="alert-title">
-                        当前分段仅接受 API Key，请切到「Session 连接」分段创建。
+                        当前分段仅接受 API Token，请切到「Session 连接」分段创建。
                       </div>
                     </div>
                   )}
@@ -2528,7 +2539,7 @@ export default function Accounts() {
                     ) : isBatchApiKeyInput ? (
                       "批量添加时校验"
                     ) : (
-                      "验证 API Key"
+                      "验证 API Token"
                     )}
                   </button>
                   <button
@@ -2698,7 +2709,7 @@ export default function Accounts() {
                           用户:{" "}
                           {rebindVerifyResult.userInfo?.username || "未知"}
                           {rebindVerifyResult.apiToken
-                            ? `，已识别 API Key (${String(rebindVerifyResult.apiToken).slice(0, 8)}...)`
+                            ? `，已识别 API Token (${String(rebindVerifyResult.apiToken).slice(0, 8)}...)`
                             : ""}
                         </div>
                       </div>
@@ -2825,6 +2836,12 @@ export default function Accounts() {
                     setEditForm((prev) => ({
                       ...prev,
                       connectionType: nextType,
+                      accessToken:
+                        nextType === "apikey"
+                          ? editingAccount?.apiToken || ""
+                          : nextType === "session"
+                            ? editingAccount?.accessToken || ""
+                            : "",
                       checkinEnabled:
                         nextType === "apikey" ? false : prev.checkinEnabled,
                     }));
@@ -2833,17 +2850,17 @@ export default function Accounts() {
                     {
                       value: "session",
                       label: "Session",
-                      description: "使用 Access Token / Cookie",
+                      description: "系统访问令牌 / Cookie",
                     },
                     {
                       value: "apikey",
-                      label: "API Key",
-                      description: "仅用于代理调用",
+                      label: "API Token",
+                      description: "上游模型调用凭证，仅用于代理",
                     },
                     {
                       value: "password",
                       label: "Password",
-                      description: "使用账号密码重新登录并自动续期",
+                      description: "账号密码登录并自动获取令牌",
                     },
                   ]}
                   placeholder="连接类型"
@@ -2910,12 +2927,12 @@ export default function Accounts() {
                     }
                   />
                   {editForm.connectionType === "apikey"
-                    ? "API Key 连接不支持签到"
+                    ? "API Token 连接不支持签到"
                     : "启用签到"}
                 </label>
-                {editForm.connectionType !== "apikey" && (
+                {editForm.connectionType === "session" && (
                   <input
-                    placeholder="Access Token"
+                    placeholder="粘贴 Session Access Token 或浏览器 Cookie"
                     value={editForm.accessToken}
                     onChange={(e) =>
                       setEditForm((prev) => ({
@@ -2926,21 +2943,32 @@ export default function Accounts() {
                     style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
                   />
                 )}
-                <input
-                  placeholder={
-                    editForm.connectionType === "apikey"
-                      ? "API Key"
-                      : "API Token（可选）"
-                  }
-                  value={editForm.apiToken}
-                  onChange={(e) =>
-                    setEditForm((prev) => ({
-                      ...prev,
-                      apiToken: e.target.value,
-                    }))
-                  }
-                  style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
-                />
+                {editForm.connectionType === "apikey" && (
+                  <input
+                    placeholder="粘贴上游 API Token"
+                    value={editForm.accessToken}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({
+                        ...prev,
+                        accessToken: e.target.value,
+                      }))
+                    }
+                    style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                  />
+                )}
+                {editForm.connectionType === "session" && (
+                  <input
+                    placeholder="默认上游 API Token（可选）"
+                    value={editForm.apiToken}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({
+                        ...prev,
+                        apiToken: e.target.value,
+                      }))
+                    }
+                    style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                  />
+                )}
                 {editForm.connectionType === "password" && (
                   <input
                     type="password"
@@ -3728,7 +3756,7 @@ export default function Accounts() {
                   {hasAccountSearch
                     ? "未找到匹配连接"
                     : activeSegment === "apikey"
-                      ? "暂无 API Key 连接"
+                      ? "暂无 API Token 连接"
                       : "暂无 Session 连接"}
                 </div>
                 <div className="empty-state-desc">
@@ -3736,8 +3764,8 @@ export default function Accounts() {
                     ? "请调整关键词，支持账号名、站点、状态和 ID 查询"
                     : activeSegment === "apikey"
                       ? sites.length > 0
-                        ? "请为现有站点补充 API Key 连接"
-                        : "请先添加站点，然后为站点补充 API Key 连接"
+                        ? "请为现有站点补充 API Token 连接"
+                        : "请先添加站点，然后为站点补充 API Token 连接"
                       : sites.length > 0
                         ? "请为现有站点添加 Session 连接"
                         : "请先添加站点，然后添加 Session 连接"}

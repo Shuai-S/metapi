@@ -22,12 +22,12 @@ describe('accountConnection helpers', () => {
   it('resolves connection display type separately from routing mode', () => {
     expect(resolveAccountConnectionDisplay({ credentialMode: 'apikey' })).toMatchObject({
       type: 'apikey',
-      label: 'API Key',
+      label: 'API Token',
       badgeClass: 'badge-warning',
     });
     expect(resolveAccountConnectionDisplay({ credentialMode: 'session' })).toMatchObject({
       type: 'session',
-      label: 'Session',
+      label: 'Session Token',
       badgeClass: 'badge-info',
     });
     expect(resolveAccountConnectionDisplay({

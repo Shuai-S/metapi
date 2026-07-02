@@ -1580,6 +1580,10 @@ export async function accountsRoutes(app: FastifyInstance) {
         }
 
         updates.accessToken = loginResult.accessToken;
+        const hasExplicitApiTokenUpdate = Object.prototype.hasOwnProperty.call(
+          updates,
+          "apiToken",
+        );
         if (preferredApiToken) {
           updates.apiToken = preferredApiToken;
         } else if (
@@ -1587,7 +1591,7 @@ export async function accountsRoutes(app: FastifyInstance) {
           updates.apiToken.trim()
         ) {
           updates.apiToken = updates.apiToken.trim();
-        } else {
+        } else if (hasExplicitApiTokenUpdate) {
           updates.apiToken = null;
         }
         if (updates.status === undefined) {
