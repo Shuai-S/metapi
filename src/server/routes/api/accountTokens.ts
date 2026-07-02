@@ -16,10 +16,17 @@ import {
   setDefaultToken,
 } from '../../services/accountTokenService.js';
 import { getAdapter } from '../../services/platforms/index.js';
-import { getCredentialModeFromExtraConfig, getProxyUrlFromExtraConfig, resolvePlatformUserId } from '../../services/accountExtraConfig.js';
+import {
+  buildStoredAccountTokenGroups,
+  getCredentialModeFromExtraConfig,
+  getProxyUrlFromExtraConfig,
+  mergeAccountExtraConfig,
+  resolvePlatformUserId,
+} from '../../services/accountExtraConfig.js';
 import { startBackgroundTask } from '../../services/backgroundTaskService.js';
 import { withAccountProxyOverride } from '../../services/siteProxy.js';
 import { type ModelRefreshResult } from '../../services/modelService.js';
+import { type ApiTokenGroupInfo } from '../../services/platforms/base.js';
 import {
   type CoverageBatchRebuildResult,
   convergeAccountMutation,
@@ -178,6 +185,40 @@ function normalizeBatchIds(input: unknown): number[] {
   return input
     .map((item) => Number.parseInt(String(item), 10))
     .filter((id) => Number.isFinite(id) && id > 0);
+}
+
+function normalizeGroupDetails(groups: ApiTokenGroupInfo[]): ApiTokenGroupInfo[] {
+  const byValue = new Map<string, ApiTokenGroupInfo>();
+  for (const group of groups) {
+    const value = String(group.value || '').trim();
+    if (!value) continue;
+    const name = String(group.name || value).trim() || value;
+    const rateMultiplier = group.rateMultiplier;
+    const normalized: ApiTokenGroupInfo = {
+      value,
+      name,
+      ...(group.id ? { id: String(group.id).trim() } : {}),
+      ...(typeof rateMultiplier === 'number' && Number.isFinite(rateMultiplier)
+        ? { rateMultiplier }
+        : {}),
+    };
+    const existing = byValue.get(value);
+    byValue.set(value, existing
+      ? {
+          ...existing,
+          id: existing.id || normalized.id,
+          name: existing.name === existing.value && normalized.name !== normalized.value
+            ? normalized.name
+            : existing.name,
+          rateMultiplier: existing.rateMultiplier ?? normalized.rateMultiplier,
+        }
+      : normalized);
+  }
+  return Array.from(byValue.values());
+}
+
+function groupDetailsFromGroupValues(groups: string[]): ApiTokenGroupInfo[] {
+  return groups.map((group) => ({ value: group, name: group }));
 }
 
 async function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
@@ -938,12 +979,43 @@ export async function accountTokensRoutes(app: FastifyInstance) {
 
     try {
       const platformUserId = resolvePlatformUserId(account.extraConfig, account.username);
-      const groups = await withAccountProxyOverride(
+      const groupDetails = await withAccountProxyOverride(
         getProxyUrlFromExtraConfig(account.extraConfig),
-        () => adapter.getUserGroups(site.url, account.accessToken, platformUserId),
+        async () => {
+          if (typeof adapter.getUserGroupDetails === 'function') {
+            return adapter.getUserGroupDetails(site.url, account.accessToken, platformUserId);
+          }
+          const groups = await adapter.getUserGroups(site.url, account.accessToken, platformUserId);
+          return groupDetailsFromGroupValues(
+            Array.from(new Set((groups || []).map((item) => String(item || '').trim()).filter(Boolean))),
+          );
+        },
       );
-      const normalized = Array.from(new Set((groups || []).map((item) => String(item || '').trim()).filter(Boolean)));
-      return { success: true, groups: normalized.length > 0 ? normalized : ['default'] };
+      const normalizedDetails = normalizeGroupDetails(
+        (groupDetails || []).length > 0
+          ? groupDetails
+          : [{ value: 'default', name: 'default' }],
+      );
+      const groupOptions = normalizedDetails.length > 0
+        ? normalizedDetails
+        : [{ value: 'default', name: 'default' }];
+      const stored = buildStoredAccountTokenGroups(groupOptions);
+      if (stored) {
+        await db.update(schema.accounts)
+          .set({
+            extraConfig: mergeAccountExtraConfig(account.extraConfig, {
+              accountTokenGroups: stored,
+            }),
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(schema.accounts.id, account.id))
+          .run();
+      }
+      return {
+        success: true,
+        groups: groupOptions.map((group) => group.value),
+        groupOptions,
+      };
     } catch (error: any) {
       return reply.code(502).send({
         success: false,

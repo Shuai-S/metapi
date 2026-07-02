@@ -1,4 +1,4 @@
-import { ApiTokenInfo, BasePlatformAdapter, CheckinResult, BalanceInfo, UserInfo, TokenVerifyResult, CreateApiTokenOptions, type PlatformDetectionContext, type SiteAnnouncement } from './base.js';
+import { ApiTokenInfo, BasePlatformAdapter, CheckinResult, BalanceInfo, UserInfo, TokenVerifyResult, CreateApiTokenOptions, type ApiTokenGroupInfo, type PlatformDetectionContext, type SiteAnnouncement } from './base.js';
 import type { RequestInit as UndiciRequestInit } from 'undici';
 import { createContext, runInContext } from 'node:vm';
 import { withSiteProxyRequestInit } from '../siteProxy.js';
@@ -268,23 +268,108 @@ export class NewApiAdapter extends BasePlatformAdapter {
     return trimmed.startsWith('Bearer ') ? trimmed.slice(7).trim() : trimmed;
   }
 
-  private parseGroupKeys(payload: any): string[] {
+  private parseGroupRateMultiplier(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value;
+    if (typeof value === 'string') {
+      const parsed = Number(value.trim());
+      if (Number.isFinite(parsed) && parsed >= 0) return Math.round(parsed * 1_000_000) / 1_000_000;
+    }
+    return undefined;
+  }
+
+  private normalizeGroupDetails(groups: ApiTokenGroupInfo[]): ApiTokenGroupInfo[] {
+    const byValue = new Map<string, ApiTokenGroupInfo>();
+    for (const group of groups) {
+      const value = String(group.value || '').trim();
+      if (!value) continue;
+      const name = String(group.name || value).trim() || value;
+      const rateMultiplier = group.rateMultiplier;
+      const normalized: ApiTokenGroupInfo = {
+        value,
+        name,
+        ...(group.id ? { id: String(group.id).trim() } : {}),
+        ...(typeof rateMultiplier === 'number' && Number.isFinite(rateMultiplier)
+          ? { rateMultiplier }
+          : {}),
+      };
+      const existing = byValue.get(value);
+      byValue.set(value, existing
+        ? {
+            ...existing,
+            id: existing.id || normalized.id,
+            name: existing.name === existing.value && normalized.name !== normalized.value
+              ? normalized.name
+              : existing.name,
+            rateMultiplier: existing.rateMultiplier ?? normalized.rateMultiplier,
+          }
+        : normalized);
+    }
+    return Array.from(byValue.values());
+  }
+
+  private parseGroupDetails(payload: any): ApiTokenGroupInfo[] {
     if (payload && typeof payload === 'object' && payload?.success === false) {
       return [];
     }
 
     const source = payload?.data ?? payload;
     if (Array.isArray(source)) {
-      return source
-        .map((item) => String(item || '').trim())
-        .filter(Boolean);
+      return this.normalizeGroupDetails(
+        source
+          .map((item): ApiTokenGroupInfo | null => {
+            if (typeof item === 'string') {
+              const value = item.trim();
+              return value ? { value, name: value } : null;
+            }
+            if (!item || typeof item !== 'object') return null;
+            const value = String(item.value ?? item.name ?? item.group ?? item.group_name ?? item.groupName ?? '').trim();
+            if (!value) return null;
+            const name = String(item.name ?? item.group_name ?? item.groupName ?? item.label ?? value).trim() || value;
+            const rateMultiplier = this.parseGroupRateMultiplier(
+              item.ratio
+              ?? item.rate
+              ?? item.rate_multiplier
+              ?? item.rateMultiplier
+              ?? item.multiplier
+              ?? item.group_ratio
+              ?? item.groupRatio,
+            );
+            return {
+              value,
+              name,
+              ...(rateMultiplier !== undefined ? { rateMultiplier } : {}),
+            } satisfies ApiTokenGroupInfo;
+          })
+          .filter((item): item is ApiTokenGroupInfo => !!item),
+      );
     }
 
     if (source && typeof source === 'object') {
-      return Object.keys(source)
-        .map((key) => key.trim())
-        .filter((key) => !['success', 'message', 'code', 'data', 'error'].includes(key.toLowerCase()))
-        .filter(Boolean);
+      return this.normalizeGroupDetails(
+        Object.entries(source)
+          .map(([key, rawValue]): ApiTokenGroupInfo | null => {
+            const value = key.trim();
+            if (!value || ['success', 'message', 'code', 'data', 'error'].includes(value.toLowerCase())) return null;
+            const rateMultiplier = this.parseGroupRateMultiplier(
+              rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue)
+                ? ((rawValue as any).ratio
+                  ?? (rawValue as any).rate
+                  ?? (rawValue as any).rate_multiplier
+                  ?? (rawValue as any).rateMultiplier
+                  ?? (rawValue as any).multiplier)
+                : rawValue,
+            );
+            const name = rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue)
+              ? String((rawValue as any).name ?? (rawValue as any).label ?? value).trim() || value
+              : value;
+            return {
+              value,
+              name,
+              ...(rateMultiplier !== undefined ? { rateMultiplier } : {}),
+            } satisfies ApiTokenGroupInfo;
+          })
+          .filter((item): item is ApiTokenGroupInfo => !!item),
+      );
     }
 
     return [];
@@ -324,9 +409,52 @@ export class NewApiAdapter extends BasePlatformAdapter {
         enabled: status === undefined ? true : status === 1,
       };
       if (rawGroup) tokenInfo.tokenGroup = rawGroup;
+      if (rawGroup) tokenInfo.tokenGroupName = rawGroup;
       normalized.push(tokenInfo);
     }
     return normalized;
+  }
+
+  private attachTokenGroupDetails(tokens: ApiTokenInfo[], groups: ApiTokenGroupInfo[]): ApiTokenInfo[] {
+    if (tokens.length === 0 || groups.length === 0) return tokens;
+    return tokens.map((token) => {
+      const tokenGroup = (token.tokenGroup || '').trim();
+      if (!tokenGroup) return token;
+      const group = groups.find((item) => (
+        [item.value, item.id, item.name]
+          .map((candidate) => String(candidate || '').trim())
+          .filter(Boolean)
+          .includes(tokenGroup)
+      ));
+      if (!group) return token;
+      const currentName = (token.tokenGroupName || '').trim();
+      const nextName = currentName && currentName !== tokenGroup ? currentName : group.name;
+      return {
+        ...token,
+        tokenGroupName: nextName,
+        tokenGroupRateMultiplier: token.tokenGroupRateMultiplier ?? group.rateMultiplier,
+      };
+    });
+  }
+
+  private mergeGroupDetails(
+    existing: ApiTokenGroupInfo[],
+    incoming: ApiTokenGroupInfo[],
+    options?: { restrictToExisting?: boolean },
+  ): ApiTokenGroupInfo[] {
+    const knownValues = new Set(
+      existing
+        .flatMap((group) => [group.value, group.id, group.name])
+        .map((candidate) => String(candidate || '').trim())
+        .filter(Boolean),
+    );
+    const filtered = options?.restrictToExisting && knownValues.size > 0
+      ? incoming.filter((group) => [group.value, group.id, group.name]
+          .map((candidate) => String(candidate || '').trim())
+          .filter(Boolean)
+          .some((candidate) => knownValues.has(candidate)))
+      : incoming;
+    return this.normalizeGroupDetails([...existing, ...filtered]);
   }
 
   private parseUserInfo(data: any): UserInfo {
@@ -815,7 +943,13 @@ export class NewApiAdapter extends BasePlatformAdapter {
         if (userId) headers['New-Api-User'] = String(userId);
         const res = await this.fetchJsonRaw<any>(`${baseUrl}/api/token/?p=0&size=100`, { headers });
         const normalized = this.normalizeTokenItems(this.parseTokenItems(res));
-        if (normalized.length > 0) return normalized;
+        if (normalized.length > 0) {
+          let groups: ApiTokenGroupInfo[] = [];
+          try {
+            groups = await this.getUserGroupDetails(baseUrl, token, userId || undefined);
+          } catch {}
+          return this.attachTokenGroupDetails(normalized, groups);
+        }
       } catch {}
     }
     return [];
@@ -1297,10 +1431,10 @@ export class NewApiAdapter extends BasePlatformAdapter {
     return false;
   }
 
-  async getUserGroups(baseUrl: string, accessToken: string, platformUserId?: number): Promise<string[]> {
+  async getUserGroupDetails(baseUrl: string, accessToken: string, platformUserId?: number): Promise<ApiTokenGroupInfo[]> {
     const resolvedUserId = platformUserId || await this.discoverUserId(baseUrl, accessToken);
-    const dedupe = (groups: string[]) => Array.from(new Set(groups.map((item) => item.trim()).filter(Boolean)));
     let terminalError: string | null = null;
+    let fallbackGroups: ApiTokenGroupInfo[] = [];
 
     try {
       const res = await this.fetchJson<any>(`${baseUrl}/api/user/self/groups`, {
@@ -1309,8 +1443,10 @@ export class NewApiAdapter extends BasePlatformAdapter {
       if (res?.success === false) {
         terminalError = this.resolveGroupFetchErrorMessage(res);
       }
-      const parsed = dedupe(this.parseGroupKeys(res));
-      if (parsed.length > 0) return parsed;
+      const parsed = this.parseGroupDetails(res);
+      if (parsed.length > 0) {
+        fallbackGroups = this.mergeGroupDetails(fallbackGroups, parsed);
+      }
     } catch {}
 
     try {
@@ -1320,9 +1456,13 @@ export class NewApiAdapter extends BasePlatformAdapter {
       if (res?.success === false) {
         terminalError = this.resolveGroupFetchErrorMessage(res);
       }
-      const parsed = dedupe(this.parseGroupKeys(res));
-      if (parsed.length > 0) return parsed;
+      const parsed = this.parseGroupDetails(res);
+      if (parsed.length > 0) {
+        return this.mergeGroupDetails(fallbackGroups, parsed, { restrictToExisting: fallbackGroups.length > 0 });
+      }
     } catch {}
+
+    if (fallbackGroups.length > 0) return fallbackGroups;
 
     const cookieUserId = resolvedUserId || await this.probeUserIdByCookie(baseUrl, accessToken);
     for (const cookie of this.buildCookieCandidates(accessToken)) {
@@ -1334,8 +1474,10 @@ export class NewApiAdapter extends BasePlatformAdapter {
         if (res?.success === false) {
           terminalError = this.resolveGroupFetchErrorMessage(res);
         }
-        const parsed = dedupe(this.parseGroupKeys(res));
-        if (parsed.length > 0) return parsed;
+        const parsed = this.parseGroupDetails(res);
+        if (parsed.length > 0) {
+          fallbackGroups = this.mergeGroupDetails(fallbackGroups, parsed);
+        }
       } catch {}
 
       try {
@@ -1343,16 +1485,25 @@ export class NewApiAdapter extends BasePlatformAdapter {
         if (res?.success === false) {
           terminalError = this.resolveGroupFetchErrorMessage(res);
         }
-        const parsed = dedupe(this.parseGroupKeys(res));
-        if (parsed.length > 0) return parsed;
+        const parsed = this.parseGroupDetails(res);
+        if (parsed.length > 0) {
+          return this.mergeGroupDetails(fallbackGroups, parsed, { restrictToExisting: fallbackGroups.length > 0 });
+        }
       } catch {}
+
+      if (fallbackGroups.length > 0) return fallbackGroups;
     }
 
     if (terminalError) {
       throw new Error(terminalError);
     }
 
-    return ['default'];
+    return [{ value: 'default', name: 'default' }];
+  }
+
+  async getUserGroups(baseUrl: string, accessToken: string, platformUserId?: number): Promise<string[]> {
+    return (await this.getUserGroupDetails(baseUrl, accessToken, platformUserId))
+      .map((group) => group.value);
   }
 
   async deleteApiToken(
@@ -1424,7 +1575,13 @@ export class NewApiAdapter extends BasePlatformAdapter {
         headers: this.authHeaders(accessToken, userId || undefined),
       });
       const normalized = this.normalizeTokenItems(this.parseTokenItems(res));
-      if (normalized.length > 0) return normalized;
+      if (normalized.length > 0) {
+        let groups: ApiTokenGroupInfo[] = [];
+        try {
+          groups = await this.getUserGroupDetails(baseUrl, accessToken, userId || undefined);
+        } catch {}
+        return this.attachTokenGroupDetails(normalized, groups);
+      }
       if (this.isTokenListResponse(res)) return [];
     } catch {}
 

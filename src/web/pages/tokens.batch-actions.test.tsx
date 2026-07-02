@@ -26,6 +26,12 @@ async function flushMicrotasks() {
   });
 }
 
+function collectText(node: any): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (!node || !node.children) return '';
+  return node.children.map((child: any) => collectText(child)).join('');
+}
+
 describe('Tokens batch actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -141,6 +147,45 @@ describe('Tokens batch actions', () => {
 
       const checkbox = root.root.find((node) => node.props['data-testid'] === 'token-select-1');
       expect(checkbox.props.checked).toBe(true);
+    } finally {
+      root?.unmount();
+    }
+  });
+
+  it('renders sub2api group display name and rate multiplier', async () => {
+    apiMock.getAccountTokens.mockResolvedValue([
+      {
+        id: 7,
+        accountId: 1,
+        name: 'token-pro',
+        tokenMasked: 'sk-***7',
+        tokenGroup: '7',
+        tokenGroupDisplayName: 'Pro',
+        tokenGroupRateMultiplier: 1.25,
+        enabled: true,
+        isDefault: false,
+        account: { username: 'alpha' },
+        site: { name: 'Sub2API', url: 'https://sub2api.example.com', platform: 'sub2api' },
+      },
+    ]);
+
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <ToastProvider>
+            <MemoryRouter initialEntries={['/accounts?segment=tokens']}>
+              <TokensPanel />
+            </MemoryRouter>
+          </ToastProvider>,
+        );
+      });
+      await flushMicrotasks();
+
+      const rendered = collectText(root.root);
+      expect(rendered).toContain('Pro');
+      expect(rendered).toContain('ID 7');
+      expect(rendered).toContain('1.25x');
     } finally {
       root?.unmount();
     }

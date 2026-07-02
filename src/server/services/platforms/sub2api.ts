@@ -1,4 +1,5 @@
 import {
+  ApiTokenGroupInfo,
   ApiTokenInfo,
   BasePlatformAdapter,
   CheckinResult,
@@ -12,6 +13,16 @@ import {
 } from './base.js';
 import { stripTrailingSlashes } from '../urlNormalization.js';
 import { withSiteRecordProxyRequestInit } from '../siteProxy.js';
+
+type Sub2ApiTokenItem = {
+  id: number;
+  key: string;
+  name: string;
+  enabled: boolean;
+  tokenGroup: string | null;
+  tokenGroupName?: string | null;
+  tokenGroupRateMultiplier?: number | null;
+};
 
 function normalizeBaseUrl(baseUrl: string): string {
   return stripTrailingSlashes(baseUrl || '');
@@ -297,7 +308,109 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
     return true;
   }
 
-  private parseTokenItems(payload: any): Array<{ id: number; key: string; name: string; enabled: boolean; tokenGroup: string | null }> {
+  private parseGroupRateMultiplier(...candidates: unknown[]): number | undefined {
+    for (const candidate of candidates) {
+      const parsed = this.parseNonNegativeNumber(candidate);
+      if (parsed !== undefined) return parsed;
+    }
+    return undefined;
+  }
+
+  private parseGroupDetail(raw: unknown): ApiTokenGroupInfo | null {
+    if (raw == null) return null;
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+      const value = String(Math.trunc(raw));
+      return { value, id: value, name: value };
+    }
+    if (typeof raw === 'string') {
+      const value = raw.trim();
+      return value ? { value, name: value } : null;
+    }
+    if (typeof raw !== 'object' || Array.isArray(raw)) return null;
+
+    const item = raw as Record<string, unknown>;
+    const numericId = this.parsePositiveInteger(
+      item.id
+      ?? item.group_id
+      ?? item.groupId
+      ?? item.value,
+    );
+    const id = numericId ? String(numericId) : undefined;
+
+    const nameCandidates = [
+      item.name,
+      item.group_name,
+      item.groupName,
+      item.title,
+      item.label,
+      item.code,
+    ];
+    const name = nameCandidates
+      .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
+      .find(Boolean);
+
+    const valueCandidate = (() => {
+      if (id) return id;
+      for (const candidate of [item.value, item.code, item.key]) {
+        if (typeof candidate !== 'string') continue;
+        const normalized = candidate.trim();
+        if (normalized) return normalized;
+      }
+      return name || '';
+    })();
+
+    if (!valueCandidate) return null;
+
+    const rateMultiplier = this.parseGroupRateMultiplier(
+      item.rate_multiplier,
+      item.rateMultiplier,
+      item.multiplier,
+      item.ratio,
+      item.group_ratio,
+      item.groupRatio,
+      item.rate,
+    );
+
+    return {
+      value: valueCandidate,
+      ...(id ? { id } : {}),
+      name: name || valueCandidate,
+      ...(rateMultiplier !== undefined ? { rateMultiplier } : {}),
+    };
+  }
+
+  private normalizeGroupDetails(groups: ApiTokenGroupInfo[]): ApiTokenGroupInfo[] {
+    const byValue = new Map<string, ApiTokenGroupInfo>();
+    for (const group of groups) {
+      const value = String(group.value || '').trim();
+      if (!value) continue;
+      const name = String(group.name || value).trim() || value;
+      const normalized: ApiTokenGroupInfo = {
+        value,
+        name,
+        ...(group.id ? { id: String(group.id).trim() } : {}),
+        ...(typeof group.rateMultiplier === 'number' && Number.isFinite(group.rateMultiplier)
+          ? { rateMultiplier: group.rateMultiplier }
+          : {}),
+      };
+      const existing = byValue.get(value);
+      if (!existing) {
+        byValue.set(value, normalized);
+        continue;
+      }
+      byValue.set(value, {
+        ...existing,
+        id: existing.id || normalized.id,
+        name: existing.name === existing.value && normalized.name !== normalized.value
+          ? normalized.name
+          : existing.name,
+        rateMultiplier: existing.rateMultiplier ?? normalized.rateMultiplier,
+      });
+    }
+    return Array.from(byValue.values());
+  }
+
+  private parseTokenItems(payload: any): Sub2ApiTokenItem[] {
     const source = payload?.data ?? payload;
     const rawItems = (() => {
       if (Array.isArray(source)) return source;
@@ -307,7 +420,7 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
       return [];
     })();
 
-    const items: Array<{ id: number; key: string; name: string; enabled: boolean; tokenGroup: string | null }> = [];
+    const items: Sub2ApiTokenItem[] = [];
     for (const item of rawItems) {
       const key = typeof item?.key === 'string' ? item.key.trim() : '';
       if (!key) continue;
@@ -316,26 +429,52 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
       const name = typeof item?.name === 'string' && item.name.trim()
         ? item.name.trim()
         : `token-${id}`;
+      const groupDetail = this.parseGroupDetail(item?.group);
       const tokenGroup = (() => {
-        const fromNumeric = Number.parseInt(String(item?.group_id ?? item?.groupId ?? ''), 10);
+        const fromNumeric = Number.parseInt(String(item?.group_id ?? item?.groupId ?? groupDetail?.id ?? ''), 10);
         if (Number.isFinite(fromNumeric) && fromNumeric > 0) return String(fromNumeric);
+        if (groupDetail?.value) return groupDetail.value;
         const fromText = typeof item?.group_name === 'string'
           ? item.group_name.trim()
           : (typeof item?.group === 'string' ? item.group.trim() : '');
         return fromText || null;
       })();
+      const tokenGroupName = (() => {
+        const candidates = [
+          item?.group_name,
+          item?.groupName,
+          groupDetail?.name,
+        ];
+        for (const candidate of candidates) {
+          if (typeof candidate !== 'string') continue;
+          const normalized = candidate.trim();
+          if (normalized) return normalized;
+        }
+        return null;
+      })();
+      const tokenGroupRateMultiplier = this.parseGroupRateMultiplier(
+        item?.group_rate_multiplier,
+        item?.groupRateMultiplier,
+        item?.rate_multiplier,
+        item?.rateMultiplier,
+        item?.multiplier,
+        item?.ratio,
+        groupDetail?.rateMultiplier,
+      );
       items.push({
         id,
         key,
         name,
         enabled: this.parseTokenEnabled(item?.status),
         tokenGroup,
+        ...(tokenGroupName ? { tokenGroupName } : {}),
+        ...(tokenGroupRateMultiplier !== undefined ? { tokenGroupRateMultiplier } : {}),
       });
     }
     return items;
   }
 
-  private parseGroupItems(payload: any): string[] {
+  private parseGroupItems(payload: any): ApiTokenGroupInfo[] {
     const source = payload?.data ?? payload;
     const rawItems = (() => {
       if (Array.isArray(source)) return source;
@@ -346,60 +485,14 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
       return [];
     })();
 
-    const groups: string[] = [];
-    for (const item of rawItems) {
-      if (item == null) continue;
-      if (typeof item === 'number' && Number.isFinite(item) && item > 0) {
-        groups.push(String(Math.trunc(item)));
-        continue;
-      }
-      if (typeof item === 'string') {
-        const normalized = item.trim();
-        if (normalized) groups.push(normalized);
-        continue;
-      }
-      if (typeof item !== 'object') continue;
-
-      const numericCandidates = [
-        (item as any).group_id,
-        (item as any).groupId,
-        (item as any).id,
-        (item as any).value,
-      ];
-      let picked = '';
-      for (const candidate of numericCandidates) {
-        const parsed = Number.parseInt(String(candidate), 10);
-        if (Number.isFinite(parsed) && parsed > 0) {
-          picked = String(parsed);
-          break;
-        }
-      }
-      if (picked) {
-        groups.push(picked);
-        continue;
-      }
-
-      const textCandidates = [
-        (item as any).name,
-        (item as any).group_name,
-        (item as any).groupName,
-        (item as any).title,
-        (item as any).label,
-        (item as any).code,
-      ];
-      for (const candidate of textCandidates) {
-        if (typeof candidate !== 'string') continue;
-        const normalized = candidate.trim();
-        if (!normalized) continue;
-        groups.push(normalized);
-        break;
-      }
-    }
-
-    return Array.from(new Set(groups));
+    return this.normalizeGroupDetails(
+      rawItems
+        .map((item: unknown) => this.parseGroupDetail(item))
+        .filter((item: ApiTokenGroupInfo | null): item is ApiTokenGroupInfo => !!item),
+    );
   }
 
-  private async listGroups(baseUrl: string, accessToken: string): Promise<string[]> {
+  private async listGroupDetails(baseUrl: string, accessToken: string): Promise<ApiTokenGroupInfo[]> {
     const endpoints = [
       '/api/v1/groups/available',
       '/api/v1/groups?page=1&page_size=100',
@@ -429,27 +522,25 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
     return [];
   }
 
-  private parseGroupIdsFromTokenPayload(payload: any): string[] {
-    const source = payload?.data ?? payload;
-    const rawItems = (() => {
-      if (Array.isArray(source)) return source;
-      if (Array.isArray(source?.items)) return source.items;
-      if (Array.isArray(source?.list)) return source.list;
-      if (Array.isArray(source?.data)) return source.data;
-      return [];
-    })();
-
-    const groups: string[] = [];
-    for (const item of rawItems) {
-      if (!item || typeof item !== 'object') continue;
-      const groupId = Number.parseInt(String((item as any).group_id ?? (item as any).groupId ?? ''), 10);
-      if (!Number.isFinite(groupId) || groupId <= 0) continue;
-      groups.push(String(groupId));
-    }
-    return Array.from(new Set(groups));
+  private parseGroupDetailsFromTokenPayload(payload: any): ApiTokenGroupInfo[] {
+    return this.normalizeGroupDetails(
+      this.parseTokenItems(payload)
+        .map((token) => {
+          const value = (token.tokenGroup || token.tokenGroupName || '').trim();
+          if (!value) return null;
+          return {
+            value,
+            name: (token.tokenGroupName || token.tokenGroup || value).trim() || value,
+            ...(token.tokenGroupRateMultiplier !== undefined
+              ? { rateMultiplier: token.tokenGroupRateMultiplier }
+              : {}),
+          } satisfies ApiTokenGroupInfo;
+        })
+        .filter((item): item is ApiTokenGroupInfo => !!item),
+    );
   }
 
-  private async inferGroupsFromKeys(baseUrl: string, accessToken: string): Promise<string[]> {
+  private async inferGroupDetailsFromKeys(baseUrl: string, accessToken: string): Promise<ApiTokenGroupInfo[]> {
     const endpoints = [
       '/api/v1/keys?page=1&page_size=100',
       '/api/v1/api-keys?page=1&page_size=100',
@@ -468,7 +559,7 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
             return res;
           }
         })();
-        const groups = this.parseGroupIdsFromTokenPayload(parsed);
+        const groups = this.parseGroupDetailsFromTokenPayload(parsed);
         if (groups.length > 0) return groups;
       } catch {}
     }
@@ -544,7 +635,7 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
     return normalizedBase;
   }
 
-  private async listApiKeys(baseUrl: string, accessToken: string): Promise<Array<{ id: number; key: string; name: string; enabled: boolean; tokenGroup: string | null }>> {
+  private async listApiKeys(baseUrl: string, accessToken: string): Promise<Sub2ApiTokenItem[]> {
     const endpoints = [
       '/api/v1/keys?page=1&page_size=100',
       '/api/v1/api-keys?page=1&page_size=100',
@@ -563,6 +654,17 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
     }
 
     return [];
+  }
+
+  private findGroupDetail(groups: ApiTokenGroupInfo[], value?: string | null): ApiTokenGroupInfo | null {
+    const normalized = (value || '').trim();
+    if (!normalized) return null;
+    return groups.find((group) => {
+      const candidates = [group.value, group.id, group.name]
+        .map((candidate) => String(candidate || '').trim())
+        .filter(Boolean);
+      return candidates.includes(normalized);
+    }) || null;
   }
 
   private async fetchModelsByToken(baseUrl: string, token: string): Promise<string[]> {
@@ -863,14 +965,27 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
 
   override async getApiTokens(baseUrl: string, accessToken: string): Promise<ApiTokenInfo[]> {
     try {
-      const keys = await this.listApiKeys(normalizeBaseUrl(baseUrl), accessToken);
+      const normalizedBase = normalizeBaseUrl(baseUrl);
+      const keys = await this.listApiKeys(normalizedBase, accessToken);
+      const needsGroupDetails = keys.some((item) => (
+        item.tokenGroup
+        && (!item.tokenGroupName || item.tokenGroupRateMultiplier === undefined)
+      ));
+      const groupDetails = needsGroupDetails
+        ? await this.listGroupDetails(normalizedBase, accessToken)
+        : [];
       return keys.map((item) => {
+        const groupDetail = this.findGroupDetail(groupDetails, item.tokenGroup);
         const tokenInfo: ApiTokenInfo = {
           name: item.name,
           key: item.key,
           enabled: item.enabled,
         };
         if (item.tokenGroup) tokenInfo.tokenGroup = item.tokenGroup;
+        const tokenGroupName = item.tokenGroupName || groupDetail?.name;
+        if (tokenGroupName) tokenInfo.tokenGroupName = tokenGroupName;
+        const tokenGroupRateMultiplier = item.tokenGroupRateMultiplier ?? groupDetail?.rateMultiplier;
+        if (tokenGroupRateMultiplier !== undefined) tokenInfo.tokenGroupRateMultiplier = tokenGroupRateMultiplier;
         return tokenInfo;
       });
     } catch {
@@ -879,19 +994,24 @@ export class Sub2ApiAdapter extends BasePlatformAdapter {
   }
 
   override async getApiToken(baseUrl: string, accessToken: string): Promise<string | null> {
-    const tokens = await this.getApiTokens(baseUrl, accessToken);
+    const tokens = await this.listApiKeys(normalizeBaseUrl(baseUrl), accessToken);
     return tokens.find((token) => token.enabled !== false)?.key || tokens[0]?.key || null;
   }
 
-  override async getUserGroups(baseUrl: string, accessToken: string): Promise<string[]> {
+  override async getUserGroupDetails(baseUrl: string, accessToken: string): Promise<ApiTokenGroupInfo[]> {
     const normalizedBase = normalizeBaseUrl(baseUrl);
-    const directGroups = await this.listGroups(normalizedBase, accessToken);
+    const directGroups = await this.listGroupDetails(normalizedBase, accessToken);
     if (directGroups.length > 0) return directGroups;
 
-    const inferredFromKeys = await this.inferGroupsFromKeys(normalizedBase, accessToken);
+    const inferredFromKeys = await this.inferGroupDetailsFromKeys(normalizedBase, accessToken);
     if (inferredFromKeys.length > 0) return inferredFromKeys;
 
-    return ['default'];
+    return [{ value: 'default', name: 'default' }];
+  }
+
+  override async getUserGroups(baseUrl: string, accessToken: string): Promise<string[]> {
+    const groups = await this.getUserGroupDetails(baseUrl, accessToken);
+    return groups.map((group) => group.value);
   }
 
   override async createApiToken(

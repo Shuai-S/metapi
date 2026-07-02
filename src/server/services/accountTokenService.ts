@@ -1,13 +1,21 @@
 ﻿import { and, eq, ne } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { getInsertedRowId } from '../db/insertHelpers.js';
-import { getCredentialModeFromExtraConfig } from './accountExtraConfig.js';
+import {
+  buildStoredAccountTokenGroups,
+  getCredentialModeFromExtraConfig,
+  mergeAccountExtraConfig,
+  resolveAccountTokenGroupInfo,
+} from './accountExtraConfig.js';
+import type { ApiTokenGroupInfo } from './platforms/base.js';
 
 type UpstreamApiToken = {
   name?: string | null;
   key?: string | null;
   enabled?: boolean | null;
   tokenGroup?: string | null;
+  tokenGroupName?: string | null;
+  tokenGroupRateMultiplier?: number | null;
 };
 
 type AccountTokenRow = typeof schema.accountTokens.$inferSelect;
@@ -171,6 +179,64 @@ function isApiKeyConnection(account: typeof schema.accounts.$inferSelect): boole
   return normalizeTokenValue(account.accessToken) === null;
 }
 
+function collectUpstreamTokenGroupDetails(tokens: UpstreamApiToken[]): ApiTokenGroupInfo[] {
+  const groups = new Map<string, ApiTokenGroupInfo>();
+  for (const token of tokens) {
+    const value = (token.tokenGroup || token.tokenGroupName || '').trim();
+    if (!value) continue;
+    const name = (token.tokenGroupName || value).trim() || value;
+    const rateMultiplier = token.tokenGroupRateMultiplier;
+    const existing = groups.get(value);
+    groups.set(value, {
+      value,
+      name: existing?.name && existing.name !== existing.value ? existing.name : name,
+      rateMultiplier: existing?.rateMultiplier ?? (
+        typeof rateMultiplier === 'number' && Number.isFinite(rateMultiplier)
+          ? rateMultiplier
+          : undefined
+      ),
+    });
+  }
+  return Array.from(groups.values());
+}
+
+async function storeAccountTokenGroupDetailsForAccount(accountId: number, groups: ApiTokenGroupInfo[]) {
+  if (groups.length === 0) return;
+  const row = await db.select({
+    extraConfig: schema.accounts.extraConfig,
+  })
+    .from(schema.accounts)
+    .innerJoin(schema.sites, eq(schema.accounts.siteId, schema.sites.id))
+    .where(eq(schema.accounts.id, accountId))
+    .get();
+  if (!row) return;
+
+  const stored = buildStoredAccountTokenGroups(groups);
+  if (!stored) return;
+  const nextExtraConfig = mergeAccountExtraConfig(row?.extraConfig, {
+    accountTokenGroups: stored,
+  });
+  await db.update(schema.accounts)
+    .set({
+      extraConfig: nextExtraConfig,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(schema.accounts.id, accountId))
+    .run();
+}
+
+function resolveTokenGroupDisplay(input: {
+  tokenGroup?: string | null;
+  accountExtraConfig?: string | null;
+}) {
+  const tokenGroup = (input.tokenGroup || '').trim() || 'default';
+  const groupInfo = resolveAccountTokenGroupInfo(input.accountExtraConfig, tokenGroup);
+  return {
+    tokenGroupDisplayName: groupInfo?.name || tokenGroup,
+    tokenGroupRateMultiplier: groupInfo?.rateMultiplier ?? null,
+  };
+}
+
 export async function getPreferredAccountToken(accountId: number) {
   const tokens = await db.select()
     .from(schema.accountTokens)
@@ -295,6 +361,7 @@ export async function repairDefaultToken(accountId: number) {
 
 export async function syncTokensFromUpstream(accountId: number, upstreamTokens: UpstreamApiToken[]) {
   const now = new Date().toISOString();
+  await storeAccountTokenGroupDetailsForAccount(accountId, collectUpstreamTokenGroupDetails(upstreamTokens));
   const existing = await db.select()
     .from(schema.accountTokens)
     .where(eq(schema.accountTokens.accountId, accountId))
@@ -489,8 +556,13 @@ export async function listTokensWithRelations(accountId?: number) {
     .filter((row) => !isApiKeyConnection(row.accounts))
     .map((row) => {
     const { token, ...tokenMeta } = row.account_tokens;
+    const tokenGroupDisplay = resolveTokenGroupDisplay({
+      tokenGroup: row.account_tokens.tokenGroup,
+      accountExtraConfig: row.accounts.extraConfig,
+    });
     return {
       ...tokenMeta,
+      ...tokenGroupDisplay,
       valueStatus: resolveAccountTokenValueStatus(row.account_tokens),
       tokenMasked: maskToken(token, row.sites.platform),
       account: {

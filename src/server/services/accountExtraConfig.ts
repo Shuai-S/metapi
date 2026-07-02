@@ -1,5 +1,5 @@
 import { config } from '../config.js';
-import type { SubscriptionPlanSummary, SubscriptionSummary } from './platforms/base.js';
+import type { ApiTokenGroupInfo, SubscriptionPlanSummary, SubscriptionSummary } from './platforms/base.js';
 
 type AutoReloginConfig = {
   username?: unknown;
@@ -19,6 +19,11 @@ type Sub2ApiSubscriptionConfig = {
   subscriptions?: unknown;
 };
 
+type Sub2ApiGroupsConfig = {
+  updatedAt?: unknown;
+  groups?: unknown;
+};
+
 export type AccountCredentialMode = 'auto' | 'session' | 'apikey';
 
 const VALID_CREDENTIAL_MODES = new Set<AccountCredentialMode>([
@@ -36,8 +41,10 @@ type AccountExtraConfig = {
     [key: string]: unknown;
   };
   autoRelogin?: AutoReloginConfig;
+  accountTokenGroups?: Sub2ApiGroupsConfig;
   sub2apiAuth?: Sub2ApiAuthConfig;
   sub2apiSubscription?: Sub2ApiSubscriptionConfig;
+  sub2apiGroups?: Sub2ApiGroupsConfig;
   [key: string]: unknown;
 };
 
@@ -224,6 +231,16 @@ export type StoredSub2ApiSubscriptionSummary = SubscriptionSummary & {
   updatedAt: number;
 };
 
+export type StoredSub2ApiGroupInfo = ApiTokenGroupInfo;
+
+export type StoredSub2ApiGroups = {
+  updatedAt: number;
+  groups: StoredSub2ApiGroupInfo[];
+};
+
+export type StoredAccountTokenGroupInfo = StoredSub2ApiGroupInfo;
+export type StoredAccountTokenGroups = StoredSub2ApiGroups;
+
 export function getSub2ApiAuthFromExtraConfig(extraConfig?: ExtraConfigInput): ManagedSub2ApiAuth | null {
   const parsed = parseExtraConfig(extraConfig);
   const raw = parsed.sub2apiAuth;
@@ -234,6 +251,135 @@ export function getSub2ApiAuthFromExtraConfig(extraConfig?: ExtraConfigInput): M
   return tokenExpiresAt
     ? { refreshToken, tokenExpiresAt }
     : { refreshToken };
+}
+
+function normalizeSub2ApiGroupItem(raw: unknown): StoredSub2ApiGroupInfo | null {
+  if (raw == null) return null;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+    const value = String(Math.trunc(raw));
+    return { value, id: value, name: value };
+  }
+  if (typeof raw === 'string') {
+    const value = raw.trim();
+    return value ? { value, name: value } : null;
+  }
+  if (!isRecord(raw)) return null;
+
+  const rawValue = normalizeNonEmptyString(raw.value);
+  const rawId = normalizeNonEmptyString(raw.id) ?? normalizeNonEmptyString(raw.groupId ?? raw.group_id);
+  const parsedId = normalizeUserId(raw.id ?? raw.groupId ?? raw.group_id ?? raw.value);
+  const id = rawId ?? (parsedId ? String(parsedId) : undefined);
+  const name = normalizeNonEmptyString(raw.name ?? raw.groupName ?? raw.group_name ?? raw.title ?? raw.label);
+  const value = rawValue ?? id ?? name;
+  if (!value) return null;
+
+  const rateMultiplier = normalizeNonNegativeNumber(
+    raw.rateMultiplier
+    ?? raw.rate_multiplier
+    ?? raw.multiplier
+    ?? raw.ratio
+    ?? raw.groupRatio
+    ?? raw.group_ratio,
+  );
+
+  return {
+    value,
+    ...(id ? { id } : {}),
+    name: name ?? value,
+    ...(rateMultiplier !== undefined ? { rateMultiplier } : {}),
+  };
+}
+
+function normalizeSub2ApiGroupItems(raw: unknown): StoredSub2ApiGroupInfo[] {
+  const source = Array.isArray(raw)
+    ? raw
+    : (isRecord(raw) && Array.isArray(raw.groups) ? raw.groups : []);
+  const byValue = new Map<string, StoredSub2ApiGroupInfo>();
+  for (const item of source) {
+    const normalized = normalizeSub2ApiGroupItem(item);
+    if (!normalized) continue;
+    const value = normalized.value.trim();
+    if (!value) continue;
+    const existing = byValue.get(value);
+    if (!existing) {
+      byValue.set(value, normalized);
+      continue;
+    }
+    byValue.set(value, {
+      ...existing,
+      id: existing.id || normalized.id,
+      name: existing.name === existing.value && normalized.name !== normalized.value
+        ? normalized.name
+        : existing.name,
+      rateMultiplier: existing.rateMultiplier ?? normalized.rateMultiplier,
+    });
+  }
+  return Array.from(byValue.values());
+}
+
+export function normalizeSub2ApiGroups(raw: unknown): StoredSub2ApiGroups | null {
+  if (!raw) return null;
+  const groups = normalizeSub2ApiGroupItems(raw);
+  if (groups.length === 0) return null;
+  const updatedAt = isRecord(raw)
+    ? normalizeTimestampMs(raw.updatedAt ?? raw.updated_at)
+    : undefined;
+  return {
+    groups,
+    updatedAt: updatedAt ?? Date.now(),
+  };
+}
+
+export function buildStoredSub2ApiGroups(
+  groups: ApiTokenGroupInfo[],
+  updatedAt = Date.now(),
+): StoredSub2ApiGroups | null {
+  return normalizeSub2ApiGroups({ groups, updatedAt });
+}
+
+export function buildStoredAccountTokenGroups(
+  groups: ApiTokenGroupInfo[],
+  updatedAt = Date.now(),
+): StoredAccountTokenGroups | null {
+  return normalizeSub2ApiGroups({ groups, updatedAt });
+}
+
+export function getAccountTokenGroupsFromExtraConfig(
+  extraConfig?: ExtraConfigInput,
+): StoredAccountTokenGroups | null {
+  const parsed = parseExtraConfig(extraConfig);
+  return normalizeSub2ApiGroups(parsed.accountTokenGroups)
+    ?? normalizeSub2ApiGroups(parsed.sub2apiGroups);
+}
+
+export function getSub2ApiGroupsFromExtraConfig(
+  extraConfig?: ExtraConfigInput,
+): StoredSub2ApiGroups | null {
+  const parsed = parseExtraConfig(extraConfig);
+  return normalizeSub2ApiGroups(parsed.sub2apiGroups);
+}
+
+export function resolveSub2ApiGroupInfo(
+  extraConfig: ExtraConfigInput,
+  groupValue?: string | null,
+): StoredSub2ApiGroupInfo | null {
+  return resolveAccountTokenGroupInfo(extraConfig, groupValue);
+}
+
+export function resolveAccountTokenGroupInfo(
+  extraConfig: ExtraConfigInput,
+  groupValue?: string | null,
+): StoredAccountTokenGroupInfo | null {
+  const normalized = (groupValue || '').trim();
+  if (!normalized) return null;
+  const stored = getAccountTokenGroupsFromExtraConfig(extraConfig);
+  if (!stored) return null;
+  return stored.groups.find((group) => {
+    const candidates = [group.value, group.id, group.name]
+      .map((candidate) => String(candidate || '').trim())
+      .filter(Boolean);
+    return candidates.includes(normalized);
+  }) || null;
 }
 
 function normalizeSubscriptionItem(raw: unknown): SubscriptionPlanSummary | null {

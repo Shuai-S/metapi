@@ -609,6 +609,65 @@ describe('Sub2ApiAdapter', () => {
     expect(await adapter.getApiToken(baseUrl, 'jwt-token')).toBe('sk-active');
   });
 
+  it('hydrates sub2api api key group names and rate multipliers from groups endpoint', async () => {
+    await startServer((req, res) => {
+      if (req.url === '/api/v1/keys?page=1&page_size=100') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          code: 0,
+          message: 'success',
+          data: {
+            items: [
+              { id: 11, key: 'sk-pro', name: 'pro-key', group_id: 7, status: 'active' },
+              {
+                id: 12,
+                key: 'sk-ultra',
+                name: 'ultra-key',
+                group_id: 8,
+                group: { id: 8, name: 'Ultra', rate_multiplier: 2 },
+                status: 'active',
+              },
+            ],
+          },
+        }));
+        return;
+      }
+      if (req.url === '/api/v1/groups/available') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          code: 0,
+          message: 'success',
+          data: [
+            { id: 7, name: 'Pro', rate_multiplier: 1.25 },
+            { id: 8, name: 'Ultra', rate_multiplier: 2 },
+          ],
+        }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    const tokens = await adapter.getApiTokens(baseUrl, 'jwt-token');
+    expect(tokens).toEqual([
+      {
+        key: 'sk-pro',
+        name: 'pro-key',
+        enabled: true,
+        tokenGroup: '7',
+        tokenGroupName: 'Pro',
+        tokenGroupRateMultiplier: 1.25,
+      },
+      {
+        key: 'sk-ultra',
+        name: 'ultra-key',
+        enabled: true,
+        tokenGroup: '8',
+        tokenGroupName: 'Ultra',
+        tokenGroupRateMultiplier: 2,
+      },
+    ]);
+  });
+
   it('fetches user groups from /api/v1/groups', async () => {
     await startServer((req, res) => {
       if (req.url === '/api/v1/groups?page=1&page_size=100') {
@@ -651,6 +710,11 @@ describe('Sub2ApiAdapter', () => {
 
     const groups = await adapter.getUserGroups(baseUrl, 'jwt-token');
     expect(groups).toEqual(['5', '6']);
+    const groupDetails = await adapter.getUserGroupDetails(baseUrl, 'jwt-token');
+    expect(groupDetails).toEqual([
+      { value: '5', id: '5', name: 'basic' },
+      { value: '6', id: '6', name: 'pro' },
+    ]);
   });
 
   it('falls back to infer groups from /api/v1/keys when group endpoint is unavailable', async () => {

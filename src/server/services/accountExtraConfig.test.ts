@@ -1,14 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildStoredAccountTokenGroups,
+  buildStoredSub2ApiGroups,
   buildStoredSub2ApiSubscriptionSummary,
   getCredentialModeFromExtraConfig,
   hasOauthProvider,
+  getAccountTokenGroupsFromExtraConfig,
   getPlatformUserIdFromExtraConfig,
   getProxyUrlFromExtraConfig,
   getUseSystemProxyFromExtraConfig,
   resolveProxyUrlFromExtraConfig,
   getSub2ApiAuthFromExtraConfig,
+  getSub2ApiGroupsFromExtraConfig,
   getSub2ApiSubscriptionFromExtraConfig,
+  resolveAccountTokenGroupInfo,
+  resolveSub2ApiGroupInfo,
   guessPlatformUserIdFromUsername,
   mergeAccountExtraConfig,
   normalizeCredentialMode,
@@ -222,6 +228,57 @@ describe('accountExtraConfig', () => {
         },
       ],
       updatedAt: 1760000000000,
+    });
+  });
+
+  it('parses stored sub2api group metadata from extra config', () => {
+    const extraConfig = mergeAccountExtraConfig(null, {
+      sub2apiGroups: buildStoredSub2ApiGroups([
+        { value: '7', id: '7', name: 'Pro', rateMultiplier: 1.25 },
+        { value: '8', name: 'Ultra', rateMultiplier: 2 },
+      ], 1760000000000),
+    });
+
+    expect(getSub2ApiGroupsFromExtraConfig(extraConfig)).toEqual({
+      updatedAt: 1760000000000,
+      groups: [
+        { value: '7', id: '7', name: 'Pro', rateMultiplier: 1.25 },
+        { value: '8', id: '8', name: 'Ultra', rateMultiplier: 2 },
+      ],
+    });
+    expect(resolveSub2ApiGroupInfo(extraConfig, '7')).toEqual({
+      value: '7',
+      id: '7',
+      name: 'Pro',
+      rateMultiplier: 1.25,
+    });
+    expect(resolveSub2ApiGroupInfo(extraConfig, 'Ultra')).toEqual({
+      value: '8',
+      id: '8',
+      name: 'Ultra',
+      rateMultiplier: 2,
+    });
+  });
+
+  it('parses stored account token group metadata from generic extra config', () => {
+    const extraConfig = mergeAccountExtraConfig(null, {
+      accountTokenGroups: buildStoredAccountTokenGroups([
+        { value: 'vip', name: 'VIP', rateMultiplier: 2 },
+        { value: 'default', name: 'default', rateMultiplier: 1 },
+      ], 1760000000000),
+    });
+
+    expect(getAccountTokenGroupsFromExtraConfig(extraConfig)).toEqual({
+      updatedAt: 1760000000000,
+      groups: [
+        { value: 'vip', name: 'VIP', rateMultiplier: 2 },
+        { value: 'default', name: 'default', rateMultiplier: 1 },
+      ],
+    });
+    expect(resolveAccountTokenGroupInfo(extraConfig, 'VIP')).toEqual({
+      value: 'vip',
+      name: 'VIP',
+      rateMultiplier: 2,
     });
   });
 });

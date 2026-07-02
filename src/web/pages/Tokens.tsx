@@ -59,7 +59,14 @@ type SyncableAccount = {
   } | null;
 };
 
+type TokenGroupOption = {
+  value: string;
+  label: string;
+  rateMultiplier?: number | null;
+};
+
 const ACCOUNT_SELECT_SEARCH_PLACEHOLDER = '筛选账号（名称 / 站点）';
+const DEFAULT_GROUP_OPTION: TokenGroupOption = { value: 'default', label: 'default' };
 
 const isAccountSyncable = (account: any) =>
   resolveAccountCredentialMode(account) === 'session'
@@ -96,6 +103,78 @@ const resolveAccountLabel = (result: AccountTokenSyncResult | null | undefined) 
   if (accountId) return `#${accountId}`;
   return '未知账号';
 };
+
+function parseFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function formatGroupRateMultiplier(value: unknown): string {
+  const parsed = parseFiniteNumber(value);
+  if (parsed === null) return '-';
+  return `${Number(parsed.toFixed(6)).toString()}x`;
+}
+
+function normalizeGroupOptionsResponse(response: any, currentValue?: string): TokenGroupOption[] {
+  const fromDetails = Array.isArray(response?.groupOptions)
+    ? response.groupOptions.map((item: any) => {
+        const value = String(item?.value ?? item?.id ?? item?.name ?? '').trim();
+        if (!value) return null;
+        const label = String(item?.label ?? item?.name ?? value).trim() || value;
+        return {
+          value,
+          label,
+          rateMultiplier: parseFiniteNumber(item?.rateMultiplier ?? item?.rate_multiplier),
+        } satisfies TokenGroupOption;
+      }).filter((item: TokenGroupOption | null): item is TokenGroupOption => !!item)
+    : [];
+  const fromGroups = fromDetails.length > 0
+    ? []
+    : (Array.isArray(response?.groups)
+        ? response.groups.map((item: any) => {
+            const value = String(item || '').trim();
+            return value ? { value, label: value } : null;
+          }).filter((item: TokenGroupOption | null): item is TokenGroupOption => !!item)
+        : []);
+
+  const byValue = new Map<string, TokenGroupOption>();
+  for (const option of [...fromDetails, ...fromGroups]) {
+    if (!option.value) continue;
+    byValue.set(option.value, option);
+  }
+
+  const normalizedCurrent = String(currentValue || '').trim();
+  if (normalizedCurrent && !byValue.has(normalizedCurrent)) {
+    byValue.set(normalizedCurrent, { value: normalizedCurrent, label: normalizedCurrent });
+  }
+
+  const options = Array.from(byValue.values());
+  return options.length > 0 ? options : [DEFAULT_GROUP_OPTION];
+}
+
+function buildGroupSelectOption(option: TokenGroupOption) {
+  const rateText = formatGroupRateMultiplier(option.rateMultiplier);
+  const valueText = option.value && option.value !== option.label ? `ID ${option.value}` : '';
+  return {
+    value: option.value,
+    label: option.label,
+    description: [valueText, rateText !== '-' ? `倍率 ${rateText}` : '']
+      .filter(Boolean)
+      .join(' · ') || undefined,
+  };
+}
+
+function resolveTokenGroupLabel(token: any): string {
+  return String(token?.tokenGroupDisplayName || token?.tokenGroupName || token?.tokenGroup || 'default').trim() || 'default';
+}
+
+function resolveTokenGroupValue(token: any): string {
+  return String(token?.tokenGroup || '').trim();
+}
 
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
@@ -163,9 +242,9 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
     enabled: true,
     isDefault: false,
   });
-  const [groupOptions, setGroupOptions] = useState<string[]>(['default']);
+  const [groupOptions, setGroupOptions] = useState<TokenGroupOption[]>([DEFAULT_GROUP_OPTION]);
   const [groupLoading, setGroupLoading] = useState(false);
-  const [editGroupOptions, setEditGroupOptions] = useState<string[]>(['default']);
+  const [editGroupOptions, setEditGroupOptions] = useState<TokenGroupOption[]>([DEFAULT_GROUP_OPTION]);
   const [editGroupLoading, setEditGroupLoading] = useState(false);
   const rowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -222,7 +301,7 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
   useEffect(() => {
     if (!showAdd || !form.accountId) {
       setGroupLoading(false);
-      setGroupOptions(['default']);
+      setGroupOptions([DEFAULT_GROUP_OPTION]);
       return;
     }
 
@@ -231,20 +310,16 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
     api.getAccountTokenGroups(form.accountId)
       .then((res: any) => {
         if (cancelled) return;
-        const groups: string[] = Array.isArray(res?.groups)
-          ? res.groups.map((item: any) => String(item || '').trim()).filter(Boolean)
-          : [];
-        const normalized = Array.from(new Set(groups));
-        const nextOptions = normalized.length > 0 ? normalized : ['default'];
+        const nextOptions = normalizeGroupOptionsResponse(res);
         setGroupOptions(nextOptions);
         setForm((prev) => {
-          if (nextOptions.includes(prev.group)) return prev;
-          return { ...prev, group: nextOptions[0] };
+          if (nextOptions.some((option) => option.value === prev.group)) return prev;
+          return { ...prev, group: nextOptions[0]?.value || 'default' };
         });
       })
       .catch((error: any) => {
         if (cancelled) return;
-        setGroupOptions(['default']);
+        setGroupOptions([DEFAULT_GROUP_OPTION]);
         setForm((prev) => ({ ...prev, group: 'default' }));
         toast.error(error?.message || '拉取分组失败，已回退 default');
       })
@@ -261,7 +336,7 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
   useEffect(() => {
     if (!editingToken?.id || !editingToken?.accountId) {
       setEditGroupLoading(false);
-      setEditGroupOptions(['default']);
+      setEditGroupOptions([DEFAULT_GROUP_OPTION]);
       return;
     }
 
@@ -271,19 +346,14 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
     api.getAccountTokenGroups(editingToken.accountId)
       .then((res: any) => {
         if (cancelled) return;
-        const groups = Array.isArray(res?.groups)
-          ? res.groups.map((item: any) => String(item || '').trim()).filter(Boolean)
-          : [];
-        const normalized = Array.from(new Set(groups));
-        setEditGroupOptions((current) => {
-          const next = normalized.length > 0 ? normalized : ['default'];
-          if (next.includes(currentGroup)) return next;
-          return [...next, currentGroup];
-        });
+        setEditGroupOptions(normalizeGroupOptionsResponse(res, currentGroup));
       })
       .catch((error: any) => {
         if (cancelled) return;
-        setEditGroupOptions((current) => (current.includes(currentGroup) ? current : [...current, currentGroup]));
+        setEditGroupOptions((current) => {
+          if (current.some((option) => option.value === currentGroup)) return current;
+          return [...current, { value: currentGroup, label: currentGroup }];
+        });
         toast.error(error?.message || '拉取分组失败，已保留当前分组');
       })
       .finally(() => {
@@ -974,10 +1044,7 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                   <ModernSelect
                     value={editForm.group || 'default'}
                     onChange={(nextValue) => setEditForm((prev) => ({ ...prev, group: nextValue || 'default' }))}
-                    options={(editGroupOptions.length > 0 ? editGroupOptions : ['default']).map((group) => ({
-                      value: group,
-                      label: group,
-                    }))}
+                    options={(editGroupOptions.length > 0 ? editGroupOptions : [DEFAULT_GROUP_OPTION]).map(buildGroupSelectOption)}
                     placeholder={editGroupLoading ? '分组加载中...' : '选择分组'}
                     disabled={editGroupLoading}
                   />
@@ -1108,10 +1175,7 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
             <ModernSelect
               value={form.group || ''}
               onChange={(nextValue) => setForm((prev) => ({ ...prev, group: nextValue }))}
-              options={(groupOptions.length > 0 ? groupOptions : ['default']).map((group) => ({
-                value: group,
-                label: group,
-              }))}
+              options={(groupOptions.length > 0 ? groupOptions : [DEFAULT_GROUP_OPTION]).map(buildGroupSelectOption)}
               placeholder={groupLoading ? '分组加载中...' : '选择分组'}
               disabled={!form.accountId || groupLoading}
             />
@@ -1183,6 +1247,9 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                 const loadingPrefix = `token-${token.id}`;
                 const isPending = isMaskedPendingToken(token);
                 const isExpanded = expandedTokenIds.includes(token.id);
+                const groupLabel = resolveTokenGroupLabel(token);
+                const groupValue = resolveTokenGroupValue(token);
+                const groupRate = formatGroupRateMultiplier(token.tokenGroupRateMultiplier);
                 return (
                   <MobileCard
                     key={token.id}
@@ -1224,7 +1291,11 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                     )}
                   >
                     <MobileField label="账号" value={token.account?.username || `account-${token.accountId}`} />
-                    <MobileField label="分组" value={token.tokenGroup || 'default'} />
+                    <MobileField
+                      label="分组"
+                      value={groupValue && groupValue !== groupLabel ? `${groupLabel} (ID ${groupValue})` : groupLabel}
+                    />
+                    <MobileField label="倍率" value={groupRate} />
                     <MobileField
                       label="状态"
                       value={(
@@ -1321,6 +1392,7 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                 <th>来源站点</th>
                 <th>账号</th>
                 <th>分组</th>
+                <th>倍率</th>
                 <th>状态</th>
                 <th>默认</th>
                 <th>更新时间</th>
@@ -1331,6 +1403,9 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
               {accountClusteredTokens.map((token: any, i: number) => {
                 const loadingPrefix = `token-${token.id}`;
                 const isPending = isMaskedPendingToken(token);
+                const groupLabel = resolveTokenGroupLabel(token);
+                const groupValue = resolveTokenGroupValue(token);
+                const groupRate = formatGroupRateMultiplier(token.tokenGroupRateMultiplier);
                 return (
                   <tr
                     key={token.id}
@@ -1373,7 +1448,15 @@ export function TokensPanel({ embedded = false, onEmbeddedActionsChange }: Token
                       )}
                     </td>
                     <td>{token.account?.username || `account-${token.accountId}`}</td>
-                    <td>{token.tokenGroup || 'default'}</td>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{groupLabel}</div>
+                      {groupValue && groupValue !== groupLabel ? (
+                        <div style={{ fontSize: 11, color: 'var(--color-text-muted)', marginTop: 2 }}>
+                          ID {groupValue}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td>{groupRate}</td>
                     <td>
                       {isPending ? (
                         <span className="badge badge-warning" style={{ fontSize: 11 }}>待补全</span>

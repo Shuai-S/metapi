@@ -66,6 +66,15 @@ export interface ApiTokenInfo {
   key: string;
   enabled?: boolean;
   tokenGroup?: string | null;
+  tokenGroupName?: string | null;
+  tokenGroupRateMultiplier?: number | null;
+}
+
+export interface ApiTokenGroupInfo {
+  value: string;
+  name: string;
+  id?: string | null;
+  rateMultiplier?: number | null;
 }
 
 export interface SiteAnnouncement {
@@ -109,6 +118,7 @@ export interface PlatformAdapter {
   getApiTokens(baseUrl: string, accessToken: string, platformUserId?: number): Promise<ApiTokenInfo[]>;
   getSiteAnnouncements(baseUrl: string, accessToken: string, platformUserId?: number): Promise<SiteAnnouncement[]>;
   getUserGroups(baseUrl: string, accessToken: string, platformUserId?: number): Promise<string[]>;
+  getUserGroupDetails?(baseUrl: string, accessToken: string, platformUserId?: number): Promise<ApiTokenGroupInfo[]>;
   createApiToken(baseUrl: string, accessToken: string, platformUserId?: number, options?: CreateApiTokenOptions): Promise<boolean>;
   deleteApiToken(baseUrl: string, accessToken: string, tokenKey: string, platformUserId?: number): Promise<boolean>;
 }
@@ -214,6 +224,15 @@ export abstract class BasePlatformAdapter implements PlatformAdapter {
     _platformUserId?: number,
   ): Promise<string[]> {
     return ['default'];
+  }
+
+  async getUserGroupDetails(
+    baseUrl: string,
+    accessToken: string,
+    platformUserId?: number,
+  ): Promise<ApiTokenGroupInfo[]> {
+    const groups = await this.getUserGroups(baseUrl, accessToken, platformUserId);
+    return groups.map((group) => ({ value: group, name: group }));
   }
 
   async deleteApiToken(

@@ -10,6 +10,7 @@ const getApiTokensMock = vi.fn();
 const getApiTokenMock = vi.fn();
 const createApiTokenMock = vi.fn();
 const getUserGroupsMock = vi.fn();
+const getUserGroupDetailsMock = vi.fn();
 const deleteApiTokenMock = vi.fn();
 
 type AccountTokenServiceModule = typeof import('../../services/accountTokenService.js');
@@ -20,6 +21,7 @@ vi.mock('../../services/platforms/index.js', () => ({
     getApiToken: (...args: unknown[]) => getApiTokenMock(...args),
     createApiToken: (...args: unknown[]) => createApiTokenMock(...args),
     getUserGroups: (...args: unknown[]) => getUserGroupsMock(...args),
+    getUserGroupDetails: (...args: unknown[]) => getUserGroupDetailsMock(...args),
     deleteApiToken: (...args: unknown[]) => deleteApiTokenMock(...args),
   }),
 }));
@@ -40,12 +42,12 @@ describe('account tokens sync routes with site status', () => {
     return seedId;
   };
 
-  const seedAccount = async (input: { siteStatus?: 'active' | 'disabled'; accountStatus?: string; accessToken?: string | null }) => {
+  const seedAccount = async (input: { siteStatus?: 'active' | 'disabled'; accountStatus?: string; accessToken?: string | null; platform?: string }) => {
     const id = nextSeed();
     const site = await db.insert(schema.sites).values({
       name: `site-${id}`,
       url: `https://site-${id}.example.com`,
-      platform: 'new-api',
+      platform: input.platform || 'new-api',
     }).returning().get();
     if (input.siteStatus === 'disabled') {
       await db.run(sql`update sites set status = 'disabled' where id = ${site.id}`);
@@ -85,6 +87,7 @@ describe('account tokens sync routes with site status', () => {
     getApiTokenMock.mockReset();
     createApiTokenMock.mockReset();
     getUserGroupsMock.mockReset();
+    getUserGroupDetailsMock.mockReset();
     deleteApiTokenMock.mockReset();
     seedId = 0;
 
@@ -150,6 +153,108 @@ describe('account tokens sync routes with site status', () => {
       .where(eq(schema.accountTokens.accountId, account.id))
       .all();
     expect(tokenRows.length).toBe(0);
+  });
+
+  it('returns token group display name and rate from synced metadata', async () => {
+    const { account } = await seedAccount({ siteStatus: 'active', platform: 'sub2api' });
+    getApiTokensMock.mockResolvedValue([
+      {
+        name: 'pro-token',
+        key: 'sk-pro-token',
+        enabled: true,
+        tokenGroup: '7',
+        tokenGroupName: 'Pro',
+        tokenGroupRateMultiplier: 1.25,
+      },
+    ]);
+    getApiTokenMock.mockResolvedValue(null);
+
+    const syncResponse = await app.inject({
+      method: 'POST',
+      url: `/api/account-tokens/sync/${account.id}`,
+    });
+    expect(syncResponse.statusCode).toBe(200);
+
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: '/api/account-tokens',
+    });
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toEqual([
+      expect.objectContaining({
+        name: 'pro-token',
+        tokenGroup: '7',
+        tokenGroupDisplayName: 'Pro',
+        tokenGroupRateMultiplier: 1.25,
+      }),
+    ]);
+
+    const updatedAccount = await db.select()
+      .from(schema.accounts)
+      .where(eq(schema.accounts.id, account.id))
+      .get();
+    expect(JSON.parse(updatedAccount?.extraConfig || '{}')).toMatchObject({
+      accountTokenGroups: {
+        groups: [
+          {
+            value: '7',
+            name: 'Pro',
+            rateMultiplier: 1.25,
+          },
+        ],
+      },
+    });
+  });
+
+  it('returns new-api token group display name and rate from synced metadata', async () => {
+    const { account } = await seedAccount({ siteStatus: 'active', platform: 'new-api' });
+    getApiTokensMock.mockResolvedValue([
+      {
+        name: 'vip-token',
+        key: 'sk-vip-token',
+        enabled: true,
+        tokenGroup: 'vip',
+        tokenGroupName: 'VIP',
+        tokenGroupRateMultiplier: 2,
+      },
+    ]);
+    getApiTokenMock.mockResolvedValue(null);
+
+    const syncResponse = await app.inject({
+      method: 'POST',
+      url: `/api/account-tokens/sync/${account.id}`,
+    });
+    expect(syncResponse.statusCode).toBe(200);
+
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: '/api/account-tokens',
+    });
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toEqual([
+      expect.objectContaining({
+        name: 'vip-token',
+        tokenGroup: 'vip',
+        tokenGroupDisplayName: 'VIP',
+        tokenGroupRateMultiplier: 2,
+      }),
+    ]);
+
+    const updatedAccount = await db.select()
+      .from(schema.accounts)
+      .where(eq(schema.accounts.id, account.id))
+      .get();
+    expect(JSON.parse(updatedAccount?.extraConfig || '{}')).toMatchObject({
+      accountTokenGroups: {
+        groups: [
+          {
+            value: 'vip',
+            name: 'VIP',
+            rateMultiplier: 2,
+          },
+        ],
+      },
+    });
   });
 
   it('stores masked upstream token values as masked_pending placeholders', async () => {
@@ -769,7 +874,10 @@ describe('account tokens sync routes with site status', () => {
 
   it('fetches account token groups from upstream', async () => {
     const { account } = await seedAccount({ siteStatus: 'active' });
-    getUserGroupsMock.mockResolvedValue(['default', 'vip']);
+    getUserGroupDetailsMock.mockResolvedValue([
+      { value: 'default', name: 'default', rateMultiplier: 1 },
+      { value: 'vip', name: 'VIP', rateMultiplier: 2 },
+    ]);
 
     const response = await app.inject({
       method: 'GET',
@@ -780,8 +888,25 @@ describe('account tokens sync routes with site status', () => {
     expect(response.json()).toMatchObject({
       success: true,
       groups: ['default', 'vip'],
+      groupOptions: [
+        { value: 'default', name: 'default', rateMultiplier: 1 },
+        { value: 'vip', name: 'VIP', rateMultiplier: 2 },
+      ],
     });
-    expect(getUserGroupsMock).toHaveBeenCalledTimes(1);
+    expect(getUserGroupDetailsMock).toHaveBeenCalledTimes(1);
+
+    const updatedAccount = await db.select()
+      .from(schema.accounts)
+      .where(eq(schema.accounts.id, account.id))
+      .get();
+    expect(JSON.parse(updatedAccount?.extraConfig || '{}')).toMatchObject({
+      accountTokenGroups: {
+        groups: [
+          { value: 'default', name: 'default', rateMultiplier: 1 },
+          { value: 'vip', name: 'VIP', rateMultiplier: 2 },
+        ],
+      },
+    });
   });
 
   it('deletes upstream token before removing local token', async () => {

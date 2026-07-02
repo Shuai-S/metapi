@@ -14,6 +14,8 @@ type UpstreamTokenLike = {
   key?: string | null;
   enabled?: boolean | null;
   tokenGroup?: string | null;
+  tokenGroupName?: string | null;
+  tokenGroupRateMultiplier?: number | null;
 };
 
 export type CoverageBatchRebuildResult =
