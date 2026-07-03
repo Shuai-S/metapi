@@ -39,8 +39,32 @@ import { SITE_DOCS_URL } from "../docsLink.js";
 import { getSiteInitializationPreset } from "../../shared/siteInitializationPresets.js";
 import { parseBatchApiKeys } from "../../shared/apiKeyBatch.js";
 
-type ConnectionsSegment = "session" | "apikey" | "tokens";
+type ConnectionsSegment = "session" | "apikey" | "tokens" | "groups";
 type EditableConnectionType = "session" | "apikey" | "password";
+
+type AccountGroupOption = {
+  value: string;
+  id?: string;
+  name: string;
+  rateMultiplier?: number;
+};
+
+type AccountGroupRow = {
+  key: string;
+  accountId: number;
+  accountName: string;
+  accountStatus: string;
+  siteId?: number;
+  siteName: string;
+  siteUrl?: string;
+  sitePlatform?: string;
+  groupValue: string;
+  groupName: string;
+  groupId?: string;
+  rateMultiplier: number | null;
+  loadStatus: "loaded" | "failed";
+  errorMessage?: string;
+};
 
 const ACCOUNT_SEGMENTS: Array<{
   value: ConnectionsSegment;
@@ -67,6 +91,13 @@ const ACCOUNT_SEGMENTS: Array<{
     value: "tokens",
     label: "账号令牌管理",
     tooltip: "从账号同步或手动维护，供路由实际调用",
+    tooltipSide: "bottom",
+    tooltipAlign: "end",
+  },
+  {
+    value: "groups",
+    label: "分组查询",
+    tooltip: "查看所有账号可用的令牌分组",
     tooltipSide: "bottom",
     tooltipAlign: "end",
   },
@@ -104,8 +135,49 @@ function createRebindForm(platformUserId = "") {
 
 function resolveConnectionsSegment(search: string): ConnectionsSegment {
   const rawSegment = new URLSearchParams(search).get("segment");
-  if (rawSegment === "apikey" || rawSegment === "tokens") return rawSegment;
+  if (rawSegment === "apikey" || rawSegment === "tokens" || rawSegment === "groups") return rawSegment;
   return "session";
+}
+
+function normalizeGroupOption(raw: unknown): AccountGroupOption | null {
+  if (raw == null) return null;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    const value = String(Math.trunc(raw));
+    return value ? { value, id: value, name: value } : null;
+  }
+  if (typeof raw === "string") {
+    const value = raw.trim();
+    return value ? { value, name: value } : null;
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as Record<string, any>;
+  const value = String(
+    record.value ?? record.id ?? record.groupId ?? record.group_id ?? record.name ?? "",
+  ).trim();
+  if (!value) return null;
+  const id = String(record.id ?? record.groupId ?? record.group_id ?? "").trim();
+  const name = String(
+    record.name ?? record.groupName ?? record.group_name ?? record.title ?? record.label ?? value,
+  ).trim() || value;
+  const rawRate =
+    record.rateMultiplier ??
+    record.rate_multiplier ??
+    record.multiplier ??
+    record.ratio ??
+    record.groupRatio ??
+    record.group_ratio;
+  const rateMultiplier = Number(rawRate);
+  return {
+    value,
+    ...(id ? { id } : {}),
+    name,
+    ...(Number.isFinite(rateMultiplier) ? { rateMultiplier } : {}),
+  };
+}
+
+function formatGroupRateMultiplier(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "-";
+  return `${value.toFixed(2).replace(/\.?0+$/, "")}x`;
 }
 
 export default function Accounts() {
@@ -120,6 +192,12 @@ export default function Accounts() {
   const [loaded, setLoaded] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("custom");
   const [accountSearch, setAccountSearch] = useState("");
+  const [groupSearch, setGroupSearch] = useState("");
+  const [upstreamGroupRows, setUpstreamGroupRows] = useState<
+    AccountGroupRow[]
+  >([]);
+  const [accountGroupsLoading, setAccountGroupsLoading] = useState(false);
+  const [accountGroupsLoaded, setAccountGroupsLoaded] = useState(false);
   const [highlightAccountId, setHighlightAccountId] = useState<number | null>(
     null,
   );
@@ -203,11 +281,14 @@ export default function Accounts() {
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRebindTargetRef = useRef<any | null>(null);
   const modelModalRequestSeqRef = useRef(0);
+  const groupLoadSeqRef = useRef(0);
   const toast = useToast();
   if (rebindTarget) lastRebindTargetRef.current = rebindTarget;
   const activeRebindTarget = rebindTarget || lastRebindTargetRef.current;
   const isRebindSub2Api =
     (activeRebindTarget?.site?.platform || "").toLowerCase() === "sub2api";
+  const isConnectionListSegment =
+    activeSegment === "session" || activeSegment === "apikey";
 
   const load = async (forceRefresh = false) => {
     try {
@@ -305,7 +386,7 @@ export default function Accounts() {
     [accounts, sortMode],
   );
   const visibleAccounts = useMemo(() => {
-    if (activeSegment === "tokens") return [];
+    if (!isConnectionListSegment) return [];
     const normalizedQuery = accountSearch.trim().toLowerCase();
     return sortedAccounts.filter(
       (account) => resolveAccountCredentialMode(account) === activeSegment,
@@ -352,7 +433,139 @@ export default function Accounts() {
         .filter((field) => field !== undefined && field !== null && field !== "")
         .some((field) => String(field).toLowerCase().includes(normalizedQuery));
     });
-  }, [accountSearch, activeSegment, sortedAccounts]);
+  }, [accountSearch, activeSegment, isConnectionListSegment, sortedAccounts]);
+
+  const loadUpstreamAccountGroups = async () => {
+    const requestId = ++groupLoadSeqRef.current;
+    const eligibleAccounts = sortedAccounts.filter(
+      (account) => resolveAccountCredentialMode(account) !== "apikey",
+    );
+    setAccountGroupsLoading(true);
+    setAccountGroupsLoaded(false);
+    setUpstreamGroupRows([]);
+
+    const nextRows: AccountGroupRow[] = [];
+    const queue = [...eligibleAccounts];
+    const workerCount = Math.min(4, Math.max(1, queue.length));
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (queue.length > 0) {
+        const account = queue.shift();
+        if (!account) continue;
+        const accountId = Number(account?.id);
+        if (!Number.isFinite(accountId) || accountId <= 0) continue;
+        const base = {
+          accountId,
+          accountName: resolveAccountDisplayName(account),
+          accountStatus: account?.status || "-",
+          siteId: account?.site?.id,
+          siteName: account?.site?.name || "-",
+          siteUrl: account?.site?.url,
+          sitePlatform: account?.site?.platform,
+        };
+        try {
+          const result = await api.getAccountTokenGroups(accountId);
+          const rawGroups = Array.isArray(result?.groupOptions)
+            ? result.groupOptions
+            : Array.isArray(result?.groups)
+              ? result.groups
+              : [];
+          const groups = rawGroups
+            .map(normalizeGroupOption)
+            .filter(Boolean) as AccountGroupOption[];
+          const uniqueGroups = new Map<string, AccountGroupOption>();
+          for (const group of groups.length > 0
+            ? groups
+            : [{ value: "default", name: "default" }]) {
+            const existing = uniqueGroups.get(group.value);
+            uniqueGroups.set(group.value, existing
+              ? {
+                  ...existing,
+                  id: existing.id || group.id,
+                  name:
+                    existing.name === existing.value &&
+                    group.name !== group.value
+                      ? group.name
+                      : existing.name,
+                  rateMultiplier:
+                    existing.rateMultiplier ?? group.rateMultiplier,
+                }
+              : group);
+          }
+          for (const group of uniqueGroups.values()) {
+            nextRows.push({
+              ...base,
+              key: `${accountId}:${group.value}`,
+              groupValue: group.value,
+              groupName: group.name || group.value,
+              groupId: group.id,
+              rateMultiplier:
+                typeof group.rateMultiplier === "number"
+                  ? group.rateMultiplier
+                  : null,
+              loadStatus: "loaded",
+            });
+          }
+        } catch (error: any) {
+          nextRows.push({
+            ...base,
+            key: `${accountId}:__error`,
+            groupValue: "-",
+            groupName: "拉取失败",
+            rateMultiplier: null,
+            loadStatus: "failed",
+            errorMessage: error?.message || "拉取上游分组失败",
+          });
+        }
+      }
+    });
+
+    await Promise.all(workers);
+    if (groupLoadSeqRef.current !== requestId) return;
+    nextRows.sort((left, right) => (
+      left.siteName.localeCompare(right.siteName, "zh-Hans") ||
+      left.accountName.localeCompare(right.accountName, "zh-Hans") ||
+      left.groupName.localeCompare(right.groupName, "zh-Hans") ||
+      left.groupValue.localeCompare(right.groupValue, "zh-Hans")
+    ));
+    setUpstreamGroupRows(nextRows);
+    setAccountGroupsLoading(false);
+    setAccountGroupsLoaded(true);
+  };
+
+  const visibleGroupRows = useMemo(() => {
+    const normalizedQuery = groupSearch.trim().toLowerCase();
+    if (!normalizedQuery) return upstreamGroupRows;
+    return upstreamGroupRows.filter((row) => {
+      const fields = [
+        row.accountId,
+        row.accountName,
+        row.accountStatus,
+        row.siteName,
+        row.sitePlatform,
+        row.groupValue,
+        row.groupName,
+        row.groupId,
+        row.rateMultiplier,
+        row.errorMessage,
+      ];
+      return fields
+        .filter((field) => field !== undefined && field !== null && field !== "")
+        .some((field) => String(field).toLowerCase().includes(normalizedQuery));
+    });
+  }, [upstreamGroupRows, groupSearch]);
+  const hasGroupSearch = groupSearch.trim().length > 0;
+  const groupLoadFailedCount = upstreamGroupRows.filter(
+    (row) => row.loadStatus === "failed",
+  ).length;
+  const groupEligibleAccountCount = sortedAccounts.filter(
+    (account) => resolveAccountCredentialMode(account) !== "apikey",
+  ).length;
+
+  useEffect(() => {
+    if (activeSegment !== "groups" || !loaded) return;
+    void loadUpstreamAccountGroups();
+  }, [activeSegment, loaded, accounts]);
+
   const hasAccountSearch = accountSearch.trim().length > 0;
   const allVisibleAccountsSelected =
     visibleAccounts.length > 0 &&
@@ -382,11 +595,11 @@ export default function Accounts() {
   };
 
   useEffect(() => {
-    if (activeSegment !== "tokens") return;
+    if (isConnectionListSegment) return;
     closeAddPanel();
     if (rebindTarget) closeRebindPanel();
     setEditingAccount(null);
-  }, [activeSegment]);
+  }, [activeSegment, isConnectionListSegment]);
 
   useEffect(() => {
     if (activeSegment === "tokens") return;
@@ -394,7 +607,7 @@ export default function Accounts() {
   }, [activeSegment]);
 
   useEffect(() => {
-    if (activeSegment === "tokens" || !loaded) return;
+    if (!isConnectionListSegment || !loaded) return;
     const params = new URLSearchParams(location.search);
     const shouldOpenCreate = isTruthyFlag(params.get("create"));
     const requestedSiteId = parsePositiveInt(params.get("siteId"));
@@ -432,7 +645,7 @@ export default function Accounts() {
       },
       { replace: true },
     );
-  }, [activeSegment, loaded, location.pathname, location.search, navigate]);
+  }, [activeSegment, isConnectionListSegment, loaded, location.pathname, location.search, navigate]);
 
   useEffect(() => {
     return () => {
@@ -1328,7 +1541,7 @@ export default function Accounts() {
 
   useEffect(() => {
     const { accountId, openRebind } = readFocusAccountIntent(location.search);
-    if (!accountId || !loaded || activeSegment === "tokens") return;
+    if (!accountId || !loaded || !isConnectionListSegment) return;
 
     const target = visibleAccounts.find((account) => account.id === accountId);
     const row = rowRefs.current.get(accountId);
@@ -1367,6 +1580,7 @@ export default function Accounts() {
     );
   }, [
     activeSegment,
+    isConnectionListSegment,
     loaded,
     location.pathname,
     location.search,
@@ -1392,7 +1606,7 @@ export default function Accounts() {
     <div className="animate-fade-in">
       <div className="page-header">
         <h2 className="page-title">{tr("连接管理")}</h2>
-        {activeSegment !== "tokens" && (
+        {isConnectionListSegment && (
           <div className="page-actions accounts-page-actions">
             {isMobile ? (
               <>
@@ -1506,88 +1720,174 @@ export default function Accounts() {
             </button>
           </div>
         )}
-        {activeSegment === "tokens" && embeddedTokenActions}
-      </div>
-
-      <ResponsiveFilterPanel
-        isMobile={isMobile}
-        mobileOpen={showMobileTools}
-        onMobileClose={() => setShowMobileTools(false)}
-        mobileTitle="连接排序与操作"
-        mobileContent={
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-                关键词查询
-              </div>
-              <input
-                data-testid="accounts-mobile-search-input"
-                value={accountSearch}
-                onChange={(event) => setAccountSearch(event.target.value)}
-                placeholder={ACCOUNT_SEARCH_PLACEHOLDER}
-                style={inputStyle}
-              />
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-                排序方式
-              </div>
-              <ModernSelect
-                value={sortMode}
-                onChange={(nextValue) => setSortMode(nextValue as SortMode)}
-                options={[
-                  { value: "custom", label: "自定义排序" },
-                  { value: "balance-desc", label: "余额高到低" },
-                  { value: "balance-asc", label: "余额低到高" },
-                ]}
-                placeholder="自定义排序"
-              />
-            </div>
-            {activeSegment === "session" && (
+        {activeSegment === "groups" && (
+          <div className="page-actions accounts-page-actions">
+            {isMobile ? (
               <button
-                onClick={async () => {
-                  setShowMobileTools(false);
-                  await withLoading(
-                    "checkin-all",
-                    () => api.triggerCheckinAll(),
-                    "已触发全部签到",
-                  );
-                }}
-                disabled={actionLoading["checkin-all"]}
+                type="button"
+                onClick={() => setShowMobileTools(true)}
                 className="btn btn-ghost"
                 style={{ border: "1px solid var(--color-border)" }}
               >
-                {actionLoading["checkin-all"] ? (
-                  <>
-                    <span className="spinner spinner-sm" />
-                    {tr("签到中...")}
-                  </>
-                ) : (
-                  tr("全部签到")
-                )}
+                查询与刷新
               </button>
+            ) : (
+              <div
+                className="accounts-search-input"
+                style={{ minWidth: 220, flex: "1 1 260px" }}
+              >
+                <input
+                  data-testid="account-groups-search-input"
+                  value={groupSearch}
+                  onChange={(event) => setGroupSearch(event.target.value)}
+                  placeholder="搜索账号 / 站点 / 分组 / 倍率"
+                  style={{
+                    ...inputStyle,
+                    height: 34,
+                    padding: "7px 12px",
+                  }}
+                />
+              </div>
             )}
             <button
-              onClick={async () => {
-                setShowMobileTools(false);
-                await handleRefreshRuntimeHealth();
-              }}
-              disabled={actionLoading["health-refresh"]}
-              className="btn btn-ghost"
-              style={{ border: "1px solid var(--color-border)" }}
+              type="button"
+              onClick={loadUpstreamAccountGroups}
+              disabled={accountGroupsLoading}
+              className="btn btn-soft-primary"
             >
-              {actionLoading["health-refresh"] ? (
+              {accountGroupsLoading ? (
                 <>
                   <span className="spinner spinner-sm" />
-                  {tr("刷新状态中...")}
+                  拉取中...
                 </>
               ) : (
-                tr("刷新账户状态")
+                "刷新上游分组"
               )}
             </button>
           </div>
-        }
-      />
+        )}
+        {activeSegment === "tokens" && embeddedTokenActions}
+      </div>
+
+      {activeSegment !== "tokens" && (
+        <ResponsiveFilterPanel
+          isMobile={isMobile}
+          mobileOpen={showMobileTools}
+          onMobileClose={() => setShowMobileTools(false)}
+          mobileTitle={
+            activeSegment === "groups" ? "分组查询与刷新" : "连接排序与操作"
+          }
+          mobileContent={
+            activeSegment === "groups" ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                    关键词查询
+                  </div>
+                  <input
+                    data-testid="account-groups-mobile-search-input"
+                    value={groupSearch}
+                    onChange={(event) => setGroupSearch(event.target.value)}
+                    placeholder="搜索账号 / 站点 / 分组 / 倍率"
+                    style={inputStyle}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setShowMobileTools(false);
+                    await loadUpstreamAccountGroups();
+                  }}
+                  disabled={accountGroupsLoading}
+                  className="btn btn-ghost"
+                  style={{ border: "1px solid var(--color-border)" }}
+                >
+                  {accountGroupsLoading ? (
+                    <>
+                      <span className="spinner spinner-sm" />
+                      拉取中...
+                    </>
+                  ) : (
+                    "刷新上游分组"
+                  )}
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                    关键词查询
+                  </div>
+                  <input
+                    data-testid="accounts-mobile-search-input"
+                    value={accountSearch}
+                    onChange={(event) => setAccountSearch(event.target.value)}
+                    placeholder={ACCOUNT_SEARCH_PLACEHOLDER}
+                    style={inputStyle}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                    排序方式
+                  </div>
+                  <ModernSelect
+                    value={sortMode}
+                    onChange={(nextValue) => setSortMode(nextValue as SortMode)}
+                    options={[
+                      { value: "custom", label: "自定义排序" },
+                      { value: "balance-desc", label: "余额高到低" },
+                      { value: "balance-asc", label: "余额低到高" },
+                    ]}
+                    placeholder="自定义排序"
+                  />
+                </div>
+                {activeSegment === "session" && (
+                  <button
+                    onClick={async () => {
+                      setShowMobileTools(false);
+                      await withLoading(
+                        "checkin-all",
+                        () => api.triggerCheckinAll(),
+                        "已触发全部签到",
+                      );
+                    }}
+                    disabled={actionLoading["checkin-all"]}
+                    className="btn btn-ghost"
+                    style={{ border: "1px solid var(--color-border)" }}
+                  >
+                    {actionLoading["checkin-all"] ? (
+                      <>
+                        <span className="spinner spinner-sm" />
+                        {tr("签到中...")}
+                      </>
+                    ) : (
+                      tr("全部签到")
+                    )}
+                  </button>
+                )}
+                <button
+                  onClick={async () => {
+                    setShowMobileTools(false);
+                    await handleRefreshRuntimeHealth();
+                  }}
+                  disabled={actionLoading["health-refresh"]}
+                  className="btn btn-ghost"
+                  style={{ border: "1px solid var(--color-border)" }}
+                >
+                  {actionLoading["health-refresh"] ? (
+                    <>
+                      <span className="spinner spinner-sm" />
+                      {tr("刷新状态中...")}
+                    </>
+                  ) : (
+                    tr("刷新账户状态")
+                  )}
+                </button>
+              </div>
+            )
+          }
+        />
+      )}
 
       <div
         style={{
@@ -1662,7 +1962,7 @@ export default function Accounts() {
         }
       />
 
-      {activeSegment !== "tokens" && selectedAccountIds.length > 0 && (
+      {isConnectionListSegment && selectedAccountIds.length > 0 && (
         <ResponsiveBatchActionBar
           isMobile={isMobile}
           info={`已选 ${selectedAccountIds.length} 项`}
@@ -1708,6 +2008,222 @@ export default function Accounts() {
           embedded
           onEmbeddedActionsChange={setEmbeddedTokenActions}
         />
+      ) : activeSegment === "groups" ? (
+        <div className="card">
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              marginBottom: 14,
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className="badge badge-info" style={{ fontSize: 11 }}>
+                上游实时拉取
+              </span>
+              <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                账号 {groupEligibleAccountCount} 个 · 分组{" "}
+                {upstreamGroupRows.filter((row) => row.loadStatus === "loaded").length}{" "}
+                条
+                {groupLoadFailedCount > 0
+                  ? ` · 失败 ${groupLoadFailedCount} 个账号`
+                  : ""}
+              </span>
+            </div>
+            {accountGroupsLoading && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 12,
+                  color: "var(--color-text-muted)",
+                }}
+              >
+                <span className="spinner spinner-sm" />
+                正在向上游查询分组...
+              </span>
+            )}
+          </div>
+
+          {visibleGroupRows.length > 0 ? (
+            isMobile ? (
+              <div className="mobile-card-list">
+                {visibleGroupRows.map((row) => (
+                  <MobileCard
+                    key={row.key}
+                    title={row.groupName}
+                    headerActions={
+                      <span
+                        className={`badge ${row.loadStatus === "failed" ? "badge-error" : "badge-success"}`}
+                        style={{ fontSize: 10 }}
+                      >
+                        {row.loadStatus === "failed" ? "失败" : "可用"}
+                      </span>
+                    }
+                  >
+                    <MobileField label="分组值" value={row.groupValue} />
+                    {row.groupId ? (
+                      <MobileField label="分组 ID" value={row.groupId} />
+                    ) : null}
+                    <MobileField label="倍率" value={formatGroupRateMultiplier(row.rateMultiplier)} />
+                    <MobileField label="账号" value={`${row.accountName} (#${row.accountId})`} />
+                    <MobileField
+                      label="站点"
+                      value={
+                        <SiteBadgeLink
+                          siteId={row.siteId}
+                          siteName={row.siteName}
+                          siteUrl={row.siteUrl}
+                          badgeStyle={{ fontSize: 11 }}
+                        />
+                      }
+                    />
+                    {row.errorMessage ? (
+                      <MobileField label="错误" stacked value={row.errorMessage} />
+                    ) : null}
+                  </MobileCard>
+                ))}
+              </div>
+            ) : (
+              <table className="data-table accounts-table">
+                <thead>
+                  <tr>
+                    <th>账号</th>
+                    <th>站点</th>
+                    <th>分组名称</th>
+                    <th>分组值</th>
+                    <th>倍率</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleGroupRows.map((row, index) => (
+                    <tr
+                      key={row.key}
+                      className={`animate-slide-up stagger-${Math.min(index + 1, 5)}`}
+                    >
+                      <td>
+                        <div style={{ fontWeight: 600 }}>
+                          {row.accountName}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: "var(--color-text-muted)",
+                          }}
+                        >
+                          #{row.accountId} · {row.accountStatus}
+                        </div>
+                      </td>
+                      <td>
+                        <SiteBadgeLink
+                          siteId={row.siteId}
+                          siteName={row.siteName}
+                          siteUrl={row.siteUrl}
+                          badgeStyle={{ fontSize: 11 }}
+                        />
+                      </td>
+                      <td style={{ color: "var(--color-text-primary)" }}>
+                        <div style={{ fontWeight: 600 }}>{row.groupName}</div>
+                        {row.groupId ? (
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--color-text-muted)",
+                              fontFamily: "var(--font-mono)",
+                            }}
+                          >
+                            ID: {row.groupId}
+                          </div>
+                        ) : null}
+                      </td>
+                      <td style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                        {row.groupValue}
+                      </td>
+                      <td style={{ fontVariantNumeric: "tabular-nums" }}>
+                        {formatGroupRateMultiplier(row.rateMultiplier)}
+                      </td>
+                      <td>
+                        <span
+                          className={`badge ${row.loadStatus === "failed" ? "badge-error" : "badge-success"}`}
+                          style={{ fontSize: 11 }}
+                          data-tooltip={row.errorMessage || undefined}
+                        >
+                          {row.loadStatus === "failed" ? "拉取失败" : "可用"}
+                        </span>
+                        {row.errorMessage ? (
+                          <div
+                            style={{
+                              marginTop: 4,
+                              maxWidth: 260,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                              fontSize: 11,
+                              color: "var(--color-text-muted)",
+                            }}
+                            data-tooltip={row.errorMessage}
+                          >
+                            {row.errorMessage}
+                          </div>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
+          ) : (
+            <div className="empty-state">
+              <svg
+                className="empty-state-icon"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1}
+                  d="M4 6h16M4 12h16M4 18h7"
+                />
+              </svg>
+              <div className="empty-state-title">
+                {accountGroupsLoading
+                  ? "正在拉取上游分组"
+                  : hasGroupSearch
+                    ? "未找到匹配分组"
+                    : accountGroupsLoaded
+                      ? "暂无可用分组"
+                      : "等待拉取上游分组"}
+              </div>
+              <div className="empty-state-desc">
+                {hasGroupSearch
+                  ? "请调整关键词，支持账号、站点、分组名称和值查询"
+                  : groupEligibleAccountCount > 0
+                    ? "分组页会直接向各账号上游查询可用分组。"
+                    : "当前没有可查询分组的 Session 连接。"}
+              </div>
+              {hasGroupSearch && (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  style={{
+                    marginTop: 12,
+                    border: "1px solid var(--color-border)",
+                  }}
+                  onClick={() => setGroupSearch("")}
+                >
+                  清空关键词
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       ) : (
         <>
           <CenteredModal

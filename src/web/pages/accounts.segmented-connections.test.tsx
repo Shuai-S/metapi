@@ -11,6 +11,7 @@ const { apiMock } = vi.hoisted(() => ({
     getAccountsSnapshot: vi.fn(),
     getSites: vi.fn(),
     getAccountTokens: vi.fn(),
+    getAccountTokenGroups: vi.fn(),
   },
 }));
 
@@ -197,6 +198,81 @@ describe('Accounts segmented connections view', () => {
       expect(rendered).toContain('password-user');
       expect(rendered).toContain('Session');
       expect(rendered).toContain('Password');
+    } finally {
+      root?.unmount();
+    }
+  });
+
+  it('queries upstream group options for every session connection in the groups segment', async () => {
+    apiMock.getAccounts.mockResolvedValue([
+      {
+        id: 1,
+        username: 'session-user',
+        accessToken: 'session-token',
+        status: 'active',
+        credentialMode: 'session',
+        capabilities: { canCheckin: true, canRefreshBalance: true, proxyOnly: false },
+        site: { id: 10, name: 'Session Site', platform: 'new-api', status: 'active', url: 'https://session.example.com' },
+      },
+      {
+        id: 2,
+        username: 'apikey-user',
+        accessToken: '',
+        apiToken: 'sk-apikey',
+        status: 'active',
+        credentialMode: 'apikey',
+        capabilities: { canCheckin: false, canRefreshBalance: false, proxyOnly: true },
+        site: { id: 11, name: 'Key Site', platform: 'new-api', status: 'active', url: 'https://key.example.com' },
+      },
+    ]);
+    apiMock.getSites.mockResolvedValue([
+      { id: 10, name: 'Session Site', platform: 'new-api', status: 'active' },
+      { id: 11, name: 'Key Site', platform: 'new-api', status: 'active' },
+    ]);
+    apiMock.getAccountTokens.mockResolvedValue([
+      {
+        id: 100,
+        accountId: 1,
+        tokenGroup: 'local-only',
+        tokenGroupDisplayName: 'Local Only',
+      },
+    ]);
+    apiMock.getAccountTokenGroups.mockResolvedValue({
+      success: true,
+      groups: ['default', 'pro'],
+      groupOptions: [
+        { value: 'default', name: 'Default' },
+        { value: 'pro', name: 'Pro', rateMultiplier: 1.25 },
+      ],
+    });
+
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/accounts?segment=groups']}>
+            <ToastProvider>
+              <Accounts />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+      await flushMicrotasks();
+
+      expect(apiMock.getAccountTokenGroups).toHaveBeenCalledTimes(1);
+      expect(apiMock.getAccountTokenGroups).toHaveBeenCalledWith(1);
+      expect(apiMock.getAccountTokens).not.toHaveBeenCalled();
+
+      const rendered = JSON.stringify(root.toJSON());
+      expect(rendered).toContain('分组查询');
+      expect(rendered).toContain('session-user');
+      expect(rendered).toContain('Session Site');
+      expect(rendered).toContain('Default');
+      expect(rendered).toContain('Pro');
+      expect(rendered).toContain('1.25x');
+      expect(rendered).not.toContain('Local Only');
+      expect(rendered).not.toContain('apikey-user');
     } finally {
       root?.unmount();
     }
