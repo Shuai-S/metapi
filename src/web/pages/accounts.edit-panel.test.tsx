@@ -144,7 +144,7 @@ describe('Accounts edit panel', () => {
 
       const usernameInput = root.root.find((node) => (
         node.type === 'input'
-        && node.props.placeholder === '账号名称'
+        && node.props.placeholder === '连接名称'
       ));
       expect(usernameInput.props.value).toBe('alpha');
     } finally {
@@ -179,8 +179,8 @@ describe('Accounts edit panel', () => {
       await selectModernOption(root, 'edit-connection-type-select', 'API Token');
 
       const apiKeyInput = root.root.find((node) => (
-        node.type === 'input'
-        && node.props.placeholder === '粘贴上游 API Token'
+        node.type === 'textarea'
+        && node.props.placeholder === '粘贴用于模型 / API 调用的上游 API Token'
       ));
       await act(async () => {
         apiKeyInput.props.onChange({ target: { value: 'sk-converted' } });
@@ -206,6 +206,76 @@ describe('Accounts edit panel', () => {
       const extraConfig = JSON.parse(payload.extraConfig);
       expect(extraConfig.credentialMode).toBe('apikey');
       expect(extraConfig.autoRelogin).toBeUndefined();
+    } finally {
+      root?.unmount();
+    }
+  });
+
+  it('updates management API user id from the edit panel', async () => {
+    apiMock.getAccounts.mockResolvedValue([
+      {
+        id: 1,
+        siteId: 1,
+        username: 'alpha',
+        accessToken: '',
+        apiToken: 'sk-old',
+        status: 'active',
+        checkinEnabled: false,
+        credentialMode: 'apikey',
+        extraConfig: JSON.stringify({ credentialMode: 'apikey', platformUserId: 1001 }),
+        capabilities: { canCheckin: false, canRefreshBalance: false, proxyOnly: true },
+        site: { id: 1, name: 'Site A', status: 'active', platform: 'new-api' },
+      },
+    ]);
+
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/accounts?segment=apikey']}>
+            <ToastProvider>
+              <Accounts />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      const editButton = root.root.find((node) => (
+        node.type === 'button'
+        && typeof node.props.onClick === 'function'
+        && collectText(node).trim() === '编辑'
+      ));
+      await act(async () => {
+        editButton.props.onClick();
+      });
+      await flushMicrotasks();
+
+      const platformUserIdInput = root.root.find((node) => (
+        node.type === 'input'
+        && node.props.placeholder === '管理 API 用户 ID（New-Api-User / User-ID，可选）'
+      ));
+      expect(platformUserIdInput.props.value).toBe('1001');
+      await act(async () => {
+        platformUserIdInput.props.onChange({ target: { value: '2002' } });
+      });
+
+      const saveButton = root.root.find((node) => (
+        node.type === 'button'
+        && typeof node.props.onClick === 'function'
+        && collectText(node).trim() === '保存修改'
+      ));
+      await act(async () => {
+        await saveButton.props.onClick();
+      });
+      await flushMicrotasks();
+
+      const [, payload] = apiMock.updateAccount.mock.calls[0]!;
+      const extraConfig = JSON.parse(payload.extraConfig);
+      expect(extraConfig).toMatchObject({
+        credentialMode: 'apikey',
+        platformUserId: 2002,
+      });
     } finally {
       root?.unmount();
     }

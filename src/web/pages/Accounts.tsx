@@ -162,6 +162,7 @@ export default function Accounts() {
     accessToken: "",
     apiToken: "",
     isPinned: false,
+    platformUserId: "",
     refreshToken: "",
     tokenExpiresAt: "",
     proxyUrl: "",
@@ -1015,6 +1016,7 @@ export default function Accounts() {
           : account?.accessToken || "",
       apiToken: account?.apiToken || "",
       isPinned: !!account?.isPinned,
+      platformUserId: extractPlatformUserId(account),
       refreshToken: managedAuth.refreshToken,
       tokenExpiresAt: managedAuth.tokenExpiresAt,
       proxyUrl,
@@ -1070,6 +1072,14 @@ export default function Accounts() {
       ...existingExtraConfig,
       credentialMode: connectionType === "apikey" ? "apikey" : "session",
     };
+    const platformUserId = editForm.platformUserId.trim()
+      ? Number.parseInt(editForm.platformUserId.trim(), 10)
+      : null;
+    if (platformUserId && Number.isFinite(platformUserId)) {
+      nextExtraConfig.platformUserId = platformUserId;
+    } else {
+      delete nextExtraConfig.platformUserId;
+    }
     if (connectionType !== "password") {
       delete nextExtraConfig.autoRelogin;
     }
@@ -2815,7 +2825,11 @@ export default function Accounts() {
             {editingAccount ? (
               <ResponsiveFormGrid>
                 <input
-                  placeholder="账号名称"
+                  placeholder={
+                    editForm.connectionType === "password"
+                      ? "登录账号"
+                      : "连接名称"
+                  }
                   value={editForm.username}
                   onChange={(e) =>
                     setEditForm((prev) => ({
@@ -2931,7 +2945,7 @@ export default function Accounts() {
                     : "启用签到"}
                 </label>
                 {editForm.connectionType === "session" && (
-                  <input
+                  <textarea
                     placeholder="粘贴 Session Access Token 或浏览器 Cookie"
                     value={editForm.accessToken}
                     onChange={(e) =>
@@ -2940,12 +2954,17 @@ export default function Accounts() {
                         accessToken: e.target.value,
                       }))
                     }
-                    style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                    style={{
+                      ...inputStyle,
+                      fontFamily: "var(--font-mono)",
+                      minHeight: 86,
+                      resize: "vertical" as const,
+                    }}
                   />
                 )}
                 {editForm.connectionType === "apikey" && (
-                  <input
-                    placeholder="粘贴上游 API Token"
+                  <textarea
+                    placeholder="粘贴用于模型 / API 调用的上游 API Token"
                     value={editForm.accessToken}
                     onChange={(e) =>
                       setEditForm((prev) => ({
@@ -2953,7 +2972,26 @@ export default function Accounts() {
                         accessToken: e.target.value,
                       }))
                     }
-                    style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                    style={{
+                      ...inputStyle,
+                      fontFamily: "var(--font-mono)",
+                      minHeight: 86,
+                      resize: "vertical" as const,
+                    }}
+                  />
+                )}
+                {(editForm.connectionType === "session" ||
+                  editForm.connectionType === "apikey") && (
+                  <input
+                    placeholder="管理 API 用户 ID（New-Api-User / User-ID，可选）"
+                    value={editForm.platformUserId}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({
+                        ...prev,
+                        platformUserId: e.target.value.replace(/\D/g, ""),
+                      }))
+                    }
+                    style={inputStyle}
                   />
                 )}
                 {editForm.connectionType === "session" && (
