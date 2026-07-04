@@ -42,6 +42,9 @@ const TABLES_WITH_NUMERIC_ID = new Set([
   'proxy_files',
   'downstream_api_keys',
   'site_announcements',
+  'customer_balance_site_accounts',
+  'customer_balance_snapshots',
+  'customer_balance_snapshot_users',
   'events',
 ]);
 

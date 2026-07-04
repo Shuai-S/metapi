@@ -416,6 +416,246 @@
         }
       }
     },
+    "customer_balance_site_accounts": {
+      "columns": {
+        "id": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": true
+        },
+        "site_id": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "username": {
+          "logicalType": "text",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "password_cipher": {
+          "logicalType": "text",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "access_token": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "platform_user_id": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "token_expires_at": {
+          "logicalType": "integer",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "last_synced_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "last_error": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "created_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": "datetime('now')",
+          "primaryKey": false
+        },
+        "updated_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": "datetime('now')",
+          "primaryKey": false
+        }
+      }
+    },
+    "customer_balance_snapshot_users": {
+      "columns": {
+        "id": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": true
+        },
+        "snapshot_id": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "upstream_user_id": {
+          "logicalType": "text",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "username": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "email": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "display_name": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "role": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "status": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "balance": {
+          "logicalType": "real",
+          "notNull": true,
+          "defaultValue": "0",
+          "primaryKey": false
+        },
+        "used": {
+          "logicalType": "real",
+          "notNull": true,
+          "defaultValue": "0",
+          "primaryKey": false
+        },
+        "quota": {
+          "logicalType": "real",
+          "notNull": true,
+          "defaultValue": "0",
+          "primaryKey": false
+        },
+        "group_name": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "created_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "last_active_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "raw_payload": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        }
+      }
+    },
+    "customer_balance_snapshots": {
+      "columns": {
+        "id": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": true
+        },
+        "site_account_id": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "site_id": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "platform": {
+          "logicalType": "text",
+          "notNull": true,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "total_users": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": "0",
+          "primaryKey": false
+        },
+        "active_users": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": "0",
+          "primaryKey": false
+        },
+        "total_balance": {
+          "logicalType": "real",
+          "notNull": true,
+          "defaultValue": "0",
+          "primaryKey": false
+        },
+        "low_balance_users": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": "0",
+          "primaryKey": false
+        },
+        "negative_balance_users": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": "0",
+          "primaryKey": false
+        },
+        "zero_balance_users": {
+          "logicalType": "integer",
+          "notNull": true,
+          "defaultValue": "0",
+          "primaryKey": false
+        },
+        "raw_payload": {
+          "logicalType": "text",
+          "notNull": false,
+          "defaultValue": null,
+          "primaryKey": false
+        },
+        "created_at": {
+          "logicalType": "datetime",
+          "notNull": false,
+          "defaultValue": "datetime('now')",
+          "primaryKey": false
+        }
+      }
+    },
     "downstream_api_keys": {
       "columns": {
         "id": {
@@ -2381,6 +2621,75 @@
       "unique": false
     },
     {
+      "name": "customer_balance_site_accounts_last_synced_at_idx",
+      "table": "customer_balance_site_accounts",
+      "columns": [
+        "last_synced_at"
+      ],
+      "unique": false
+    },
+    {
+      "name": "customer_balance_site_accounts_site_id_idx",
+      "table": "customer_balance_site_accounts",
+      "columns": [
+        "site_id"
+      ],
+      "unique": false
+    },
+    {
+      "name": "customer_balance_site_accounts_site_unique",
+      "table": "customer_balance_site_accounts",
+      "columns": [
+        "site_id"
+      ],
+      "unique": true
+    },
+    {
+      "name": "customer_balance_snapshot_users_snapshot_balance_idx",
+      "table": "customer_balance_snapshot_users",
+      "columns": [
+        "snapshot_id",
+        "balance"
+      ],
+      "unique": false
+    },
+    {
+      "name": "customer_balance_snapshot_users_snapshot_status_idx",
+      "table": "customer_balance_snapshot_users",
+      "columns": [
+        "snapshot_id",
+        "status"
+      ],
+      "unique": false
+    },
+    {
+      "name": "customer_balance_snapshot_users_snapshot_user_unique",
+      "table": "customer_balance_snapshot_users",
+      "columns": [
+        "snapshot_id",
+        "upstream_user_id"
+      ],
+      "unique": true
+    },
+    {
+      "name": "customer_balance_snapshots_account_created_at_idx",
+      "table": "customer_balance_snapshots",
+      "columns": [
+        "site_account_id",
+        "created_at"
+      ],
+      "unique": false
+    },
+    {
+      "name": "customer_balance_snapshots_site_created_at_idx",
+      "table": "customer_balance_snapshots",
+      "columns": [
+        "site_id",
+        "created_at"
+      ],
+      "unique": false
+    },
+    {
       "name": "downstream_api_keys_enabled_idx",
       "table": "downstream_api_keys",
       "columns": [
@@ -2973,6 +3282,21 @@
       ]
     },
     {
+      "name": "customer_balance_site_accounts_site_unique",
+      "table": "customer_balance_site_accounts",
+      "columns": [
+        "site_id"
+      ]
+    },
+    {
+      "name": "customer_balance_snapshot_users_snapshot_user_unique",
+      "table": "customer_balance_snapshot_users",
+      "columns": [
+        "snapshot_id",
+        "upstream_user_id"
+      ]
+    },
+    {
       "name": "downstream_api_keys_key_unique",
       "table": "downstream_api_keys",
       "columns": [
@@ -3127,6 +3451,50 @@
         "account_id"
       ],
       "referencedTable": "accounts",
+      "referencedColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE"
+    },
+    {
+      "table": "customer_balance_site_accounts",
+      "columns": [
+        "site_id"
+      ],
+      "referencedTable": "sites",
+      "referencedColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE"
+    },
+    {
+      "table": "customer_balance_snapshot_users",
+      "columns": [
+        "snapshot_id"
+      ],
+      "referencedTable": "customer_balance_snapshots",
+      "referencedColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE"
+    },
+    {
+      "table": "customer_balance_snapshots",
+      "columns": [
+        "site_account_id"
+      ],
+      "referencedTable": "customer_balance_site_accounts",
+      "referencedColumns": [
+        "id"
+      ],
+      "onDelete": "CASCADE"
+    },
+    {
+      "table": "customer_balance_snapshots",
+      "columns": [
+        "site_id"
+      ],
+      "referencedTable": "sites",
       "referencedColumns": [
         "id"
       ],

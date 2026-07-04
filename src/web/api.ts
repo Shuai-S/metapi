@@ -1231,6 +1231,43 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload || {}),
     }),
+
+  // Customer balances
+  getCustomerBalanceSites: () => request("/api/customer-balances/sites"),
+  getCustomerBalanceAccounts: () => request("/api/customer-balances/accounts"),
+  saveCustomerBalanceAccount: (data: {
+    siteId: number;
+    username: string;
+    password: string;
+  }) =>
+    request("/api/customer-balances/accounts", {
+      method: "POST",
+      body: JSON.stringify(data),
+      timeoutMs: 45_000,
+    }),
+  deleteCustomerBalanceAccount: (id: number) =>
+    request(`/api/customer-balances/accounts/${id}`, { method: "DELETE" }),
+  syncCustomerBalanceAccount: (id: number) =>
+    request(`/api/customer-balances/accounts/${id}/sync`, {
+      method: "POST",
+      timeoutMs: 180_000,
+    }),
+  getCustomerBalanceSnapshots: (siteAccountId?: number) =>
+    request(
+      `/api/customer-balances/snapshots${buildQueryString(
+        siteAccountId ? { siteAccountId } : undefined,
+      )}`,
+    ),
+  getCustomerBalanceSnapshot: (
+    id: number,
+    params?: { search?: string; status?: string; balance?: string },
+  ) =>
+    request(`/api/customer-balances/snapshots/${id}${buildQueryString(params)}`),
+  clearCustomerBalanceSnapshots: (id: number) =>
+    request(`/api/customer-balances/accounts/${id}/snapshots`, {
+      method: "DELETE",
+    }),
+
   getTasks: (limit = 50) =>
     request(
       `/api/tasks?limit=${Math.max(1, Math.min(200, Math.trunc(limit)))}`,

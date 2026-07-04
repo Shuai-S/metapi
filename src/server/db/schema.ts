@@ -544,6 +544,64 @@ export const siteAnnouncements = sqliteTable('site_announcements', {
   readAtIdx: index('site_announcements_read_at_idx').on(table.readAt),
 }));
 
+export const customerBalanceSiteAccounts = sqliteTable('customer_balance_site_accounts', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  siteId: integer('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  username: text('username').notNull(),
+  passwordCipher: text('password_cipher').notNull(),
+  accessToken: text('access_token'),
+  platformUserId: text('platform_user_id'),
+  tokenExpiresAt: integer('token_expires_at'),
+  lastSyncedAt: text('last_synced_at'),
+  lastError: text('last_error'),
+  createdAt: text('created_at').default(sql`(datetime('now'))`),
+  updatedAt: text('updated_at').default(sql`(datetime('now'))`),
+}, (table) => ({
+  siteUnique: uniqueIndex('customer_balance_site_accounts_site_unique').on(table.siteId),
+  siteIdIdx: index('customer_balance_site_accounts_site_id_idx').on(table.siteId),
+  lastSyncedAtIdx: index('customer_balance_site_accounts_last_synced_at_idx').on(table.lastSyncedAt),
+}));
+
+export const customerBalanceSnapshots = sqliteTable('customer_balance_snapshots', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  siteAccountId: integer('site_account_id').notNull().references(() => customerBalanceSiteAccounts.id, { onDelete: 'cascade' }),
+  siteId: integer('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  platform: text('platform').notNull(),
+  totalUsers: integer('total_users').notNull().default(0),
+  activeUsers: integer('active_users').notNull().default(0),
+  totalBalance: real('total_balance').notNull().default(0),
+  lowBalanceUsers: integer('low_balance_users').notNull().default(0),
+  negativeBalanceUsers: integer('negative_balance_users').notNull().default(0),
+  zeroBalanceUsers: integer('zero_balance_users').notNull().default(0),
+  rawPayload: text('raw_payload'),
+  createdAt: text('created_at').default(sql`(datetime('now'))`),
+}, (table) => ({
+  siteCreatedIdx: index('customer_balance_snapshots_site_created_at_idx').on(table.siteId, table.createdAt),
+  accountCreatedIdx: index('customer_balance_snapshots_account_created_at_idx').on(table.siteAccountId, table.createdAt),
+}));
+
+export const customerBalanceSnapshotUsers = sqliteTable('customer_balance_snapshot_users', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  snapshotId: integer('snapshot_id').notNull().references(() => customerBalanceSnapshots.id, { onDelete: 'cascade' }),
+  upstreamUserId: text('upstream_user_id').notNull(),
+  username: text('username'),
+  email: text('email'),
+  displayName: text('display_name'),
+  role: text('role'),
+  status: text('status'),
+  balance: real('balance').notNull().default(0),
+  used: real('used').notNull().default(0),
+  quota: real('quota').notNull().default(0),
+  groupName: text('group_name'),
+  createdAt: text('created_at'),
+  lastActiveAt: text('last_active_at'),
+  rawPayload: text('raw_payload'),
+}, (table) => ({
+  snapshotUserUnique: uniqueIndex('customer_balance_snapshot_users_snapshot_user_unique').on(table.snapshotId, table.upstreamUserId),
+  snapshotBalanceIdx: index('customer_balance_snapshot_users_snapshot_balance_idx').on(table.snapshotId, table.balance),
+  snapshotStatusIdx: index('customer_balance_snapshot_users_snapshot_status_idx').on(table.snapshotId, table.status),
+}));
+
 export const events = sqliteTable('events', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   type: text('type').notNull(), // 'checkin' | 'balance' | 'token' | 'proxy' | 'status'
