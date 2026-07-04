@@ -180,6 +180,15 @@ function formatGroupRateMultiplier(value: number | null): string {
   return `${value.toFixed(2).replace(/\.?0+$/, "")}x`;
 }
 
+function compareAccountGroupRows(left: AccountGroupRow, right: AccountGroupRow) {
+  return (
+    left.siteName.localeCompare(right.siteName, "zh-Hans") ||
+    left.accountName.localeCompare(right.accountName, "zh-Hans") ||
+    left.groupName.localeCompare(right.groupName, "zh-Hans") ||
+    left.groupValue.localeCompare(right.groupValue, "zh-Hans")
+  );
+}
+
 export default function Accounts() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -444,7 +453,6 @@ export default function Accounts() {
     setAccountGroupsLoaded(false);
     setUpstreamGroupRows([]);
 
-    const nextRows: AccountGroupRow[] = [];
     const queue = [...eligibleAccounts];
     const workerCount = Math.min(4, Math.max(1, queue.length));
     const workers = Array.from({ length: workerCount }, async () => {
@@ -462,6 +470,7 @@ export default function Accounts() {
           siteUrl: account?.site?.url,
           sitePlatform: account?.site?.platform,
         };
+        let accountRows: AccountGroupRow[] = [];
         try {
           const result = await api.getAccountTokenGroups(accountId);
           const rawGroups = Array.isArray(result?.groupOptions)
@@ -491,8 +500,7 @@ export default function Accounts() {
                 }
               : group);
           }
-          for (const group of uniqueGroups.values()) {
-            nextRows.push({
+          accountRows = Array.from(uniqueGroups.values()).map((group) => ({
               ...base,
               key: `${accountId}:${group.value}`,
               groupValue: group.value,
@@ -503,10 +511,9 @@ export default function Accounts() {
                   ? group.rateMultiplier
                   : null,
               loadStatus: "loaded",
-            });
-          }
+            }));
         } catch (error: any) {
-          nextRows.push({
+          accountRows = [{
             ...base,
             key: `${accountId}:__error`,
             groupValue: "-",
@@ -514,6 +521,16 @@ export default function Accounts() {
             rateMultiplier: null,
             loadStatus: "failed",
             errorMessage: error?.message || "拉取上游分组失败",
+          }];
+        }
+
+        if (groupLoadSeqRef.current === requestId) {
+          setUpstreamGroupRows((current) => {
+            const nextRows = [
+              ...current.filter((row) => row.accountId !== accountId),
+              ...accountRows,
+            ];
+            return nextRows.sort(compareAccountGroupRows);
           });
         }
       }
@@ -521,13 +538,6 @@ export default function Accounts() {
 
     await Promise.all(workers);
     if (groupLoadSeqRef.current !== requestId) return;
-    nextRows.sort((left, right) => (
-      left.siteName.localeCompare(right.siteName, "zh-Hans") ||
-      left.accountName.localeCompare(right.accountName, "zh-Hans") ||
-      left.groupName.localeCompare(right.groupName, "zh-Hans") ||
-      left.groupValue.localeCompare(right.groupValue, "zh-Hans")
-    ));
-    setUpstreamGroupRows(nextRows);
     setAccountGroupsLoading(false);
     setAccountGroupsLoaded(true);
   };
