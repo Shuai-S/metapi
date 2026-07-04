@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,13 @@ function jsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
     headers: { 'content-type': 'application/json' },
+  });
+}
+
+function jsonResponseWithHeaders(payload: unknown, headers: Record<string, string>, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'content-type': 'application/json', ...headers },
   });
 }
 
@@ -149,6 +157,89 @@ describe('customer balance routes', () => {
         expect.objectContaining({ username: 'bob', balance: 0, used: 0.5 }),
         expect.objectContaining({ username: 'alice', balance: 2, used: 1 }),
       ]);
+  });
+
+  it('uses the New API login user id as the required New-Api-User admin header', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'QuantumNous New API',
+      url: 'https://newapi.example.com',
+      platform: 'newapi',
+    }).returning().get();
+    const userRequests: Array<{ url: string; newApiUser: string | null; authorization: string | null; cookie: string | null }> = [];
+
+    upstreamFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      if (url.endsWith('/api/user/login')) {
+        return jsonResponseWithHeaders({
+          success: true,
+          data: { id: 10, username: 'admin', role: 10, status: 1, group: 'default' },
+        }, {
+          'set-cookie': 'session=session-cookie-value; Path=/; HttpOnly',
+        });
+      }
+      if (url.endsWith('/api/user/self')) {
+        return jsonResponse({ success: false, message: 'Unauthorized, New-Api-User header not provided' }, 401);
+      }
+      if (url.includes('/api/user/?')) {
+        userRequests.push({
+          url,
+          newApiUser: headers.get('New-Api-User'),
+          authorization: headers.get('Authorization'),
+          cookie: headers.get('Cookie'),
+        });
+        if (headers.get('New-Api-User') !== '10') {
+          return jsonResponse({ success: false, message: 'Unauthorized, New-Api-User header not provided' }, 401);
+        }
+        return jsonResponse({
+          success: true,
+          data: {
+            total: 1,
+            items: [
+              { id: 3, username: 'carol', quota: 3_000_000, used_quota: 0, status: 1, group: 'default' },
+            ],
+          },
+        });
+      }
+      return jsonResponse({ success: false, message: `unexpected ${url}` }, 404);
+    });
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/customer-balances/accounts',
+      payload: {
+        siteId: site.id,
+        username: 'admin',
+        password: 'secret',
+      },
+    });
+    expect(createResponse.statusCode).toBe(200);
+
+    const syncResponse = await app.inject({
+      method: 'POST',
+      url: `/api/customer-balances/accounts/${createResponse.json().account.id}/sync`,
+    });
+
+    const account = await db.select()
+      .from(schema.customerBalanceSiteAccounts)
+      .where(eq(schema.customerBalanceSiteAccounts.id, createResponse.json().account.id))
+      .get();
+    expect(syncResponse.statusCode, JSON.stringify({
+      response: syncResponse.json(),
+      userRequests,
+      platformUserId: account?.platformUserId,
+    })).toBe(200);
+    expect(syncResponse.json().snapshot).toMatchObject({
+      totalUsers: 1,
+      activeUsers: 1,
+      totalBalance: 6,
+    });
+    expect(userRequests).toEqual([
+      expect.objectContaining({
+        newApiUser: '10',
+        cookie: expect.stringContaining('session=session-cookie-value'),
+      }),
+    ]);
+    expect(account?.platformUserId).toBe('10');
   });
 
   it('syncs Sub2API customer balances', async () => {

@@ -152,7 +152,7 @@ describe('NewApiAdapter', () => {
             });
             res.end(JSON.stringify({
               success: true,
-              data: {},
+              data: { id: 7788, username: COOKIE_ONLY_LOGIN_USERNAME, role: 10 },
             }));
             return;
           }
@@ -636,6 +636,7 @@ describe('NewApiAdapter', () => {
     expect(result.accessToken || '').toContain(`session=${COOKIE_ONLY_LOGIN_SESSION}`);
     expect(result.accessToken || '').toContain(`acw_sc__v2=${ANYROUTER_CHALLENGE_ACW}`);
     expect(result.accessToken || '').toContain(`cdn_sec_tc=${SHIELD_LOGIN_COOKIE}`);
+    expect(result.platformUserId).toBe(7788);
   });
 
   it('detects cookie session values as session cookies for anyrouter-like deployments', async () => {

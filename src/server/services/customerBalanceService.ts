@@ -411,7 +411,7 @@ async function loginSiteAccount(site: SiteRow, account: SiteAccountRow): Promise
   }
   return {
     accessToken: normalizeCredentialToken(result.accessToken),
-    platformUserId: null,
+    platformUserId: result.platformUserId ? String(result.platformUserId) : null,
   };
 }
 
@@ -419,7 +419,8 @@ async function ensureAccessToken(site: SiteRow, account: SiteAccountRow): Promis
   const now = Date.now();
   const existing = normalizeCredentialToken(account.accessToken || '');
   const tokenExpiresAt = Number(account.tokenExpiresAt || 0);
-  if (existing && (!tokenExpiresAt || tokenExpiresAt - now > 60_000)) {
+  const needsNewApiUserId = normalizePlatform(site.platform) === 'new-api' && !account.platformUserId;
+  if (existing && !needsNewApiUserId && (!tokenExpiresAt || tokenExpiresAt - now > 60_000)) {
     return existing;
   }
   const loginResult = await loginSiteAccount(site, account);
@@ -478,7 +479,6 @@ function newApiAdminHeaders(accessToken: string, userId?: string | null): Record
   const headers: Record<string, string> = authHeaders(accessToken);
   if (userId) {
     headers['New-Api-User'] = userId;
-    headers['New-API-User'] = userId;
     headers['Veloera-User'] = userId;
     headers['voapi-user'] = userId;
     headers['User-id'] = userId;

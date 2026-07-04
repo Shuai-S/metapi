@@ -41,6 +41,7 @@ interface LoginResult {
   success: boolean;
   accessToken?: string;
   username?: string;
+  platformUserId?: number;
   refreshToken?: string;
   tokenExpiresAt?: number;
   message?: string;

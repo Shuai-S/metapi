@@ -493,6 +493,24 @@ export class NewApiAdapter extends BasePlatformAdapter {
     return null;
   }
 
+  private extractLoginUserId(payload: any): number | undefined {
+    const candidates: unknown[] = [
+      payload?.id,
+      payload?.user_id,
+      payload?.userId,
+      payload?.data?.id,
+      payload?.data?.user_id,
+      payload?.data?.userId,
+      payload?.data?.user?.id,
+      payload?.data?.user?.user_id,
+    ];
+    for (const candidate of candidates) {
+      const parsed = Number.parseInt(String(candidate ?? ''), 10);
+      if (Number.isFinite(parsed) && parsed > 0) return Math.trunc(parsed);
+    }
+    return undefined;
+  }
+
   private buildDefaultTokenPayload(options?: CreateApiTokenOptions): Record<string, unknown> {
     const normalizedName = (options?.name || '').trim() || 'metapi';
     const unlimitedQuota = options?.unlimitedQuota ?? true;
@@ -1072,7 +1090,7 @@ export class NewApiAdapter extends BasePlatformAdapter {
     baseUrl: string,
     username: string,
     password: string,
-  ): Promise<{ success: boolean; accessToken?: string; username?: string; message?: string }> {
+  ): Promise<{ success: boolean; accessToken?: string; username?: string; platformUserId?: number; message?: string }> {
     try {
       const { data: res, cookieHeader } = await this.fetchJsonRawWithCookie<any>(`${baseUrl}/api/user/login`, {
         method: 'POST',
@@ -1086,11 +1104,13 @@ export class NewApiAdapter extends BasePlatformAdapter {
       }
 
       const accessToken = this.extractLoginAccessToken(res);
+      const platformUserId = this.extractLoginUserId(res);
       if (res?.success && accessToken) {
         return {
           success: true,
           accessToken,
           username,
+          platformUserId,
         };
       }
       if (res?.success && this.hasUsableSessionCookie(cookieHeader)) {
@@ -1098,6 +1118,7 @@ export class NewApiAdapter extends BasePlatformAdapter {
           success: true,
           accessToken: cookieHeader,
           username,
+          platformUserId,
         };
       }
 
