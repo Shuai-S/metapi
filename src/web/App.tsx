@@ -38,6 +38,7 @@ const Monitors = lazy(() => import('./pages/Monitors.js'));
 const OAuthManagement = lazy(() => import('./pages/OAuthManagement.js'));
 const SiteAnnouncements = lazy(() => import('./pages/SiteAnnouncements.js'));
 const CustomerBalances = lazy(() => import('./pages/CustomerBalances.js'));
+const Features = lazy(() => import('./pages/Features.js'));
 
 type ThemeMode = 'system' | 'light' | 'dark';
 
@@ -405,6 +406,12 @@ function UserProfileModal({
 }
 
 export const sidebarGroups = [
+  {
+    label: '功能',
+    items: [
+      { to: '/features', label: '卡密转 sub2api', icon: <svg className="sidebar-item-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M7 7h10M7 12h7m-7 5h10M5 3h10l4 4v12a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2zM15 3v5h5" /></svg> },
+    ],
+  },
   {
     label: '控制台',
     items: [
@@ -880,6 +887,7 @@ function AppShell() {
                 <Route path="/models" element={<Models />} />
                 <Route path="/playground" element={<ModelTester />} />
                 <Route path="/about" element={<About />} />
+                <Route path="/features" element={<Features />} />
                 <Route path="*" element={<Navigate to="/" />} />
               </Routes>
             </Suspense>
