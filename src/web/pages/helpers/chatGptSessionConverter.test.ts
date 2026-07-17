@@ -66,6 +66,38 @@ describe('ChatGPT Session converter', () => {
     });
   });
 
+  it('applies configured models and account scheduling fields to sub2api output', () => {
+    const result = convertChatGptSessionSources(
+      [{ text: JSON.stringify(session), sourceName: 'session.json' }],
+      {
+        format: 'sub2api',
+        now,
+        sub2apiAccountSettings: {
+          models: ['codex-auto-review', 'gpt-5.4', 'gpt-5.4', '  gpt-5.5  '],
+          concurrency: 5,
+          rateMultiplier: 0,
+          priority: 10,
+        },
+      },
+    );
+    expect((result.output as any).accounts[0]).toMatchObject({
+      concurrency: 5,
+      priority: 10,
+      rate_multiplier: 0,
+      credentials: {
+        model_mapping: {
+          'codex-auto-review': 'codex-auto-review',
+          'gpt-5.4': 'gpt-5.4',
+          'gpt-5.5': 'gpt-5.5',
+        },
+      },
+    });
+    expect(result.converted[0]).toMatchObject({
+      accountOutputPriority: 10,
+      sub2apiPriority: 10001,
+    });
+  });
+
   it('builds each supported output contract from the same normalized session', () => {
     expect(SESSION_OUTPUT_FORMATS).toEqual([
       'sub2api', 'cpa', 'cockpit', '9router', 'axonhub', 'codexmanager',

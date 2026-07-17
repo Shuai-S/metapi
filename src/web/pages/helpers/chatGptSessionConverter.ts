@@ -38,12 +38,20 @@ export type ConvertedSession = {
   effectiveExpiresAt?: string;
   priority: number;
   sub2apiPriority: number;
+  accountOutputPriority: number;
   cpa: Record<string, unknown>;
   cockpit: Record<string, unknown>;
   nineRouter: Record<string, unknown>;
   axonHub: Record<string, unknown>;
   codexManager: Record<string, unknown>;
   sub2apiAccount: Record<string, unknown>;
+};
+
+export type Sub2ApiAccountOutputSettings = {
+  models?: string[];
+  concurrency?: number;
+  priority?: number;
+  rateMultiplier?: number;
 };
 
 export type SessionConversionResult = {
@@ -59,6 +67,7 @@ export type SessionConversionResult = {
 export type SessionConversionOptions = {
   format?: SessionOutputFormat;
   forceRefreshAfterImport?: boolean;
+  sub2apiAccountSettings?: Sub2ApiAccountOutputSettings;
   now?: Date;
 };
 
@@ -350,12 +359,28 @@ function asOutputRecord(value: unknown): Record<string, unknown> {
   return isPlainObject(value) ? value : {};
 }
 
+function normalizeNonNegativeNumber(value: unknown, fallback: number, integer = false): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return fallback;
+  return integer ? Math.trunc(numeric) : numeric;
+}
+
+function buildModelMapping(models: string[] | undefined): Record<string, string> | undefined {
+  const normalized = Array.from(new Set(
+    (models || []).map((model) => model.trim()).filter(Boolean),
+  ));
+  return normalized.length
+    ? Object.fromEntries(normalized.map((model) => [model, model]))
+    : undefined;
+}
+
 function convertSession(
   record: Record<string, any>,
   sourceName: string,
   sourcePath: string,
   now: Date,
   forceRefreshAfterImport: boolean,
+  sub2apiAccountSettings?: Sub2ApiAccountOutputSettings,
 ): ConvertedSession {
   const accessToken = firstNonEmpty(
     record.accessToken,
@@ -501,6 +526,16 @@ function convertSession(
   const idToken = firstNonEmpty(inputIdToken, syntheticIdToken);
   const dynamicPriority = getDynamicPriority(now);
   const sub2apiPriority = getSub2apiPriority(now);
+  const accountOutputPriority = sub2apiAccountSettings?.priority === undefined
+    ? sub2apiPriority
+    : normalizeNonNegativeNumber(sub2apiAccountSettings.priority, sub2apiPriority, true);
+  const accountOutputConcurrency = sub2apiAccountSettings?.concurrency === undefined
+    ? 10
+    : normalizeNonNegativeNumber(sub2apiAccountSettings.concurrency, 10, true);
+  const accountRateMultiplier = sub2apiAccountSettings?.rateMultiplier === undefined
+    ? undefined
+    : normalizeNonNegativeNumber(sub2apiAccountSettings.rateMultiplier, 1);
+  const modelMapping = buildModelMapping(sub2apiAccountSettings?.models);
 
   const cpa = asOutputRecord(stripUnavailable({
     type: 'codex',
@@ -535,8 +570,9 @@ function convertSession(
     name,
     platform: 'openai',
     type: 'oauth',
-    concurrency: 10,
-    priority: sub2apiPriority,
+    concurrency: accountOutputConcurrency,
+    priority: accountOutputPriority,
+    rate_multiplier: accountRateMultiplier,
     notes: normalizeDateOnly(now),
     credentials: {
       access_token: accessToken,
@@ -546,6 +582,7 @@ function convertSession(
       expires_in: expiresIn,
       id_token: idToken,
       refresh_token: refreshToken,
+      model_mapping: modelMapping,
     },
     extra: {
       email,
@@ -622,6 +659,7 @@ function convertSession(
     effectiveExpiresAt,
     priority: dynamicPriority,
     sub2apiPriority,
+    accountOutputPriority,
     cpa,
     cockpit,
     nineRouter,
@@ -684,6 +722,7 @@ export function convertChatGptSessionSources(
         candidate.path,
         now,
         Boolean(options.forceRefreshAfterImport),
+        options.sub2apiAccountSettings,
       ));
     } catch (error) {
       issues.push({

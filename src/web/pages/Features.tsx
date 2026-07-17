@@ -18,6 +18,21 @@ const EXAMPLE_SESSION = JSON.stringify({
   idToken: 'paste-real-id-token-here',
 }, null, 2);
 
+const DEFAULT_SUB2API_MODELS = [
+  'codex-auto-review',
+  'gpt-5.4',
+  'gpt-5.5',
+  'gpt-5.6-luna',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+];
+
+function parseNonNegativeSetting(value: string, fallback: number, integer = false): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return fallback;
+  return integer ? Math.trunc(numeric) : numeric;
+}
+
 function triggerDownload(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -52,12 +67,46 @@ export default function Features() {
   const [isDragging, setIsDragging] = useState(false);
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const [readError, setReadError] = useState('');
+  const [accountModels, setAccountModels] = useState([...DEFAULT_SUB2API_MODELS]);
+  const [modelDraft, setModelDraft] = useState('');
+  const [accountConcurrency, setAccountConcurrency] = useState('5');
+  const [accountRateMultiplier, setAccountRateMultiplier] = useState('0');
+  const [accountPriority, setAccountPriority] = useState('10');
 
   const hasInput = sources.some((source) => source.text.trim() !== '');
   const result = useMemo(() => {
     if (!hasInput) return null;
-    return convertChatGptSessionSources(sources, { format, forceRefreshAfterImport });
-  }, [forceRefreshAfterImport, format, hasInput, sources]);
+    return convertChatGptSessionSources(sources, {
+      format,
+      forceRefreshAfterImport,
+      sub2apiAccountSettings: {
+        models: accountModels,
+        concurrency: parseNonNegativeSetting(accountConcurrency, 5, true),
+        rateMultiplier: parseNonNegativeSetting(accountRateMultiplier, 0),
+        priority: parseNonNegativeSetting(accountPriority, 10, true),
+      },
+    });
+  }, [
+    accountConcurrency,
+    accountModels,
+    accountPriority,
+    accountRateMultiplier,
+    forceRefreshAfterImport,
+    format,
+    hasInput,
+    sources,
+  ]);
+
+  const commitModelDraft = () => {
+    const additions = modelDraft
+      .split(/[,\n，]/u)
+      .map((model) => model.trim())
+      .filter(Boolean);
+    if (additions.length) {
+      setAccountModels((current) => Array.from(new Set([...current, ...additions])));
+    }
+    setModelDraft('');
+  };
 
   const setPastedInput = (value: string) => {
     setInputText(value);
@@ -125,12 +174,82 @@ export default function Features() {
 
       <section className="feature-tool">
         <div className="feature-tool-heading">
-          <div className="feature-tool-icon" aria-hidden="true">
-            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M7 7h10M7 12h7m-7 5h10M5 3h10l4 4v12a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2zM15 3v5h5" /></svg>
+          <div className="feature-tool-heading-copy">
+            <div className="feature-tool-icon" aria-hidden="true">
+              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M7 7h10M7 12h7m-7 5h10M5 3h10l4 4v12a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2zM15 3v5h5" /></svg>
+            </div>
+            <div>
+              <h3>{tr('ChatGPT Session 格式转换')}</h3>
+              <p>{tr('支持嵌套 JSON、逐行 JSON、卡密导出文本及多文件')}</p>
+            </div>
           </div>
-          <div>
-            <h3>{tr('ChatGPT Session 格式转换')}</h3>
-            <p>{tr('支持嵌套 JSON、逐行 JSON、卡密导出文本及多文件')}</p>
+
+          <div className="session-account-settings" aria-label={tr('Sub2API 输出账号设置')}>
+            <div className="session-account-settings-top">
+              <strong>{tr('Sub2API 输出账号设置')}</strong>
+              <label className="session-account-number-field">
+                <span>{tr('并发')}</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={accountConcurrency}
+                  onChange={(event) => setAccountConcurrency(event.target.value)}
+                />
+              </label>
+              <label className="session-account-number-field">
+                <span>{tr('账号倍率')}</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={accountRateMultiplier}
+                  onChange={(event) => setAccountRateMultiplier(event.target.value)}
+                />
+              </label>
+              <label className="session-account-number-field">
+                <span>{tr('优先级')}</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={accountPriority}
+                  onChange={(event) => setAccountPriority(event.target.value)}
+                />
+              </label>
+            </div>
+
+            <div className="session-model-setting-row">
+              <span className="session-model-setting-label">{tr('模型')}</span>
+              <div className="session-model-tags">
+                {accountModels.map((model) => (
+                  <span key={model} className="session-model-chip">
+                    <span>{model}</span>
+                    <button
+                      type="button"
+                      aria-label={`${tr('移除模型')} ${model}`}
+                      title={`${tr('移除模型')} ${model}`}
+                      onClick={() => setAccountModels((current) => current.filter((item) => item !== model))}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+                <input
+                  type="text"
+                  value={modelDraft}
+                  aria-label={tr('添加模型')}
+                  placeholder={tr('输入模型后按回车')}
+                  onChange={(event) => setModelDraft(event.target.value)}
+                  onBlur={commitModelDraft}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ',') return;
+                    event.preventDefault();
+                    commitModelDraft();
+                  }}
+                />
+              </div>
+            </div>
           </div>
         </div>
 
@@ -286,7 +405,9 @@ export default function Features() {
                         <td>{account.name}</td>
                         <td>{account.email || '-'}</td>
                         <td>{formatDisplayDate(account.effectiveExpiresAt || account.expiresAt)}</td>
-                        <td>{format === 'cpa' || format === 'cockpit' ? account.priority : account.sub2apiPriority}</td>
+                        <td>{format === 'sub2api'
+                          ? account.accountOutputPriority
+                          : (format === 'cpa' || format === 'cockpit' ? account.priority : account.sub2apiPriority)}</td>
                         <td>{account.sourceName}</td>
                       </tr>
                     ))}
