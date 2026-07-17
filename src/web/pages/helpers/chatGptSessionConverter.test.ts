@@ -1,0 +1,137 @@
+import { describe, expect, it } from 'vitest';
+import {
+  convertChatGptSessionSources,
+  parseJwtPayload,
+  SESSION_OUTPUT_FORMATS,
+  type SessionOutputFormat,
+} from './chatGptSessionConverter.js';
+
+function token(payload: object) {
+  const encode = (value: object) => btoa(JSON.stringify(value))
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+  return `${encode({ alg: 'none' })}.${encode(payload)}.signature`;
+}
+
+const now = new Date('2026-06-15T12:00:00.000Z');
+const expiresAt = '2026-08-06T14:29:36.000Z';
+const accessToken = token({
+  exp: Math.floor(Date.parse(expiresAt) / 1000),
+  email: 'token@example.com',
+  'https://api.openai.com/auth': {
+    chatgpt_account_id: 'account-1',
+    chatgpt_user_id: 'user-1',
+    chatgpt_plan_type: 'plus',
+  },
+});
+const session = {
+  user: { id: 'user-1', email: 'mark@example.com' },
+  account: { id: 'account-1', planType: 'plus' },
+  accessToken,
+  refreshToken: 'refresh-1',
+};
+
+function convert(format: SessionOutputFormat, value: unknown = session) {
+  return convertChatGptSessionSources(
+    [{ text: JSON.stringify(value), sourceName: 'session.json' }],
+    { format, now },
+  );
+}
+
+describe('ChatGPT Session converter', () => {
+  it('finds nested sessions and builds the sub2api import document', () => {
+    const result = convert('sub2api', { payload: { sessions: [session] } });
+    const output = result.output as any;
+    expect(result.inputAccounts).toBe(1);
+    expect(result.outputAccounts).toBe(1);
+    expect(result.issues).toEqual([]);
+    expect(output.exported_at).toBe(now.toISOString());
+    expect(output.accounts[0]).toMatchObject({
+      name: 'mark@example.com',
+      platform: 'openai',
+      type: 'oauth',
+      priority: 10001,
+      credentials: {
+        access_token: accessToken,
+        chatgpt_user_id: 'user-1',
+        email: 'mark@example.com',
+        expires_at: expiresAt,
+        refresh_token: 'refresh-1',
+      },
+      extra: {
+        email_key: 'mark_example_com',
+        source: 'chatgpt_web_session',
+      },
+    });
+  });
+
+  it('builds each supported output contract from the same normalized session', () => {
+    expect(SESSION_OUTPUT_FORMATS).toEqual([
+      'sub2api', 'cpa', 'cockpit', '9router', 'axonhub', 'codexmanager',
+    ]);
+    expect(convert('cpa').output).toMatchObject({
+      type: 'codex',
+      email: 'mark@example.com',
+      priority: 9999,
+      access_token: accessToken,
+      refresh_token: 'refresh-1',
+    });
+    expect(convert('cockpit').output).toMatchObject({
+      type: 'codex', account_id: 'account-1', access_token: accessToken,
+    });
+    expect(convert('9router').output).toMatchObject({
+      provider: 'codex', authType: 'oauth', id: 'account-1', isActive: true,
+    });
+    expect(convert('axonhub').output).toMatchObject({
+      auth_mode: 'chatgpt', tokens: { access_token: accessToken, refresh_token: 'refresh-1' },
+    });
+    expect(convert('codexmanager').output).toMatchObject({
+      priority: 10001,
+      tokens: { access_token: accessToken, refresh_token: 'refresh-1', account_id: 'account-1' },
+      meta: { label: 'mark@example.com' },
+    });
+  });
+
+  it('creates a synthetic CPA id token when the source has an account id but no id token', () => {
+    const output = convert('cpa').output as any;
+    expect(output.id_token_synthetic).toBe(true);
+    expect(parseJwtPayload(output.id_token)).toMatchObject({
+      email: 'mark@example.com',
+      'https://api.openai.com/auth': {
+        chatgpt_account_id: 'account-1',
+        chatgpt_user_id: 'user-1',
+        chatgpt_plan_type: 'plus',
+      },
+    });
+  });
+
+  it('parses banner-prefixed and concatenated JSON documents', () => {
+    const second = { ...session, user: { id: 'user-2', email: 'two@example.com' } };
+    const result = convertChatGptSessionSources([{
+      sourceName: 'card-key.txt',
+      text: `卡密导出\n${JSON.stringify(session)}\n${JSON.stringify(second)}`,
+    }], { format: 'sub2api', now });
+    expect(result.outputAccounts).toBe(2);
+    expect(result.converted.map((item) => item.email)).toEqual(['mark@example.com', 'two@example.com']);
+  });
+
+  it('sets the effective expiry to 24 hours after conversion when refresh is requested', () => {
+    const result = convertChatGptSessionSources(
+      [{ sourceName: 'session.json', text: JSON.stringify(session) }],
+      { format: 'sub2api', now, forceRefreshAfterImport: true },
+    );
+    expect(result.converted[0].effectiveExpiresAt).toBe('2026-06-16T12:00:00.000Z');
+    expect((result.output as any).accounts[0].credentials.expires_at).toBe('2026-06-16T12:00:00.000Z');
+  });
+
+  it('reports invalid documents without producing output', () => {
+    const result = convertChatGptSessionSources(
+      [{ sourceName: 'broken.json', text: '{nope' }],
+      { format: 'sub2api', now },
+    );
+    expect(result.outputAccounts).toBe(0);
+    expect(result.outputText).toBe('');
+    expect(result.issues[0]).toMatchObject({ sourceName: 'broken.json', path: '$' });
+  });
+});

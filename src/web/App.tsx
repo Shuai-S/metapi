@@ -409,7 +409,7 @@ export const sidebarGroups = [
   {
     label: '功能',
     items: [
-      { to: '/features', label: '卡密转 sub2api', icon: <svg className="sidebar-item-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M7 7h10M7 12h7m-7 5h10M5 3h10l4 4v12a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2zM15 3v5h5" /></svg> },
+      { to: '/features', label: 'Session 转换器', icon: <svg className="sidebar-item-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M7 7h10M7 12h7m-7 5h10M5 3h10l4 4v12a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2zM15 3v5h5" /></svg> },
     ],
   },
   {

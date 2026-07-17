@@ -1,45 +1,125 @@
-import React, { useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { tr } from '../i18n.js';
-import { convertCardKeyExport, type CardKeyConversionResult } from './helpers/cardKeyToSub2api.js';
+import {
+  convertChatGptSessionSources,
+  SESSION_OUTPUT_FORMATS,
+  SESSION_OUTPUT_LABELS,
+  type SessionOutputFormat,
+  type SessionSourceDocument,
+} from './helpers/chatGptSessionConverter.js';
+import { buildSessionDownload } from './helpers/sessionDownload.js';
 
-function downloadResult(result: CardKeyConversionResult) {
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const blob = new Blob([JSON.stringify(result.output, null, 2)], { type: 'application/json;charset=utf-8' });
+const EXAMPLE_SESSION = JSON.stringify({
+  user: { id: 'user-example', email: 'mark@example.com' },
+  expires: '2026-08-06T14:29:36.155Z',
+  account: { id: '00000000-0000-4000-9000-000000000000', planType: 'plus' },
+  accessToken: 'paste-real-access-token-here',
+  refreshToken: 'paste-real-refresh-token-here',
+  idToken: 'paste-real-id-token-here',
+}, null, 2);
+
+function triggerDownload(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `sub2api_converted_${date}.json`;
+  link.download = fileName;
+  document.body.append(link);
   link.click();
-  URL.revokeObjectURL(url);
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function formatDisplayDate(value?: string): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
 }
 
 export default function Features() {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [fileName, setFileName] = useState('');
-  const [result, setResult] = useState<CardKeyConversionResult | null>(null);
-  const [error, setError] = useState('');
-  const [strict, setStrict] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const outputRef = useRef<HTMLTextAreaElement>(null);
+  const [format, setFormat] = useState<SessionOutputFormat>('sub2api');
+  const [inputText, setInputText] = useState('');
+  const [sources, setSources] = useState<SessionSourceDocument[]>([]);
+  const [forceRefreshAfterImport, setForceRefreshAfterImport] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
+  const [readError, setReadError] = useState('');
 
-  const readFile = async (file?: File) => {
-    if (!file) return;
-    setFileName(file.name);
-    setError('');
+  const hasInput = sources.some((source) => source.text.trim() !== '');
+  const result = useMemo(() => {
+    if (!hasInput) return null;
+    return convertChatGptSessionSources(sources, { format, forceRefreshAfterImport });
+  }, [forceRefreshAfterImport, format, hasInput, sources]);
+
+  const setPastedInput = (value: string) => {
+    setInputText(value);
+    setSources(value ? [{ text: value, sourceName: 'pasted-json' }] : []);
+    setCopyState('idle');
+    setReadError('');
+  };
+
+  const readFiles = async (files: File[]) => {
+    if (!files.length) return;
+    const acceptedFiles = files.filter((file) => /\.(json|txt)$/i.test(file.name));
+    if (!acceptedFiles.length) {
+      setReadError(tr('请选择 JSON 或 TXT 文件'));
+      return;
+    }
     try {
-      const next = convertCardKeyExport(await file.text(), strict);
-      if (next.inputAccounts === 0) throw new Error(tr('未找到可转换的账号'));
-      setResult(next);
-    } catch (err) {
-      setResult(null);
-      setError(err instanceof Error ? err.message : tr('文件转换失败'));
+      const documents = await Promise.all(acceptedFiles.map(async (file) => ({
+        text: await file.text(),
+        sourceName: file.webkitRelativePath || file.name,
+      })));
+      setSources(documents);
+      setInputText(documents.map((document) => document.text).join('\n\n'));
+      setCopyState('idle');
+      setReadError(files.length === acceptedFiles.length ? '' : tr('已忽略非 JSON/TXT 文件'));
+    } catch (error) {
+      setReadError(error instanceof Error ? error.message : tr('文件读取失败'));
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
+  const clearInput = () => {
+    setInputText('');
+    setSources([]);
+    setCopyState('idle');
+    setReadError('');
+  };
+
+  const copyOutput = async () => {
+    if (!result?.outputText) return;
+    try {
+      await navigator.clipboard.writeText(result.outputText);
+    } catch {
+      outputRef.current?.select();
+      document.execCommand('copy');
+    }
+    setCopyState('copied');
+    window.setTimeout(() => setCopyState('idle'), 1600);
+  };
+
+  const downloadOutput = () => {
+    if (!result?.outputText) return;
+    const download = buildSessionDownload(result);
+    triggerDownload(download.blob, download.fileName);
+  };
+
   return (
-    <div className="feature-page">
+    <div className="feature-page session-converter-page">
       <div className="page-header feature-page-header">
         <div>
-          <h2 className="page-title">{tr('功能')}</h2>
-          <p className="feature-page-subtitle">{tr('本地数据处理工具')}</p>
+          <h2 className="page-title">{tr('Session 转换器')}</h2>
+          <p className="feature-page-subtitle">{tr('浏览器本地解析，不上传 Token，不写入存储')}</p>
         </div>
       </div>
 
@@ -49,39 +129,182 @@ export default function Features() {
             <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M7 7h10M7 12h7m-7 5h10M5 3h10l4 4v12a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2zM15 3v5h5" /></svg>
           </div>
           <div>
-            <h3>{tr('卡密转 sub2api')}</h3>
-            <p>{tr('将卡密批量导出文本转换为 sub2api 可导入的 JSON 文件')}</p>
+            <h3>{tr('ChatGPT Session 格式转换')}</h3>
+            <p>{tr('支持嵌套 JSON、逐行 JSON、卡密导出文本及多文件')}</p>
           </div>
         </div>
 
-        <button type="button" className="feature-dropzone" onClick={() => inputRef.current?.click()}>
-          <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M12 16V4m0 0L7 9m5-5l5 5M5 20h14" /></svg>
-          <strong>{fileName || tr('选择卡密导出文件')}</strong>
-          <span>{tr('支持 UTF-8 / UTF-8 BOM 的 .txt 文件')}</span>
-        </button>
-        <input ref={inputRef} hidden type="file" accept=".txt,text/plain" onChange={(event) => void readFile(event.target.files?.[0])} />
+        <div className="session-format-bar" aria-label={tr('输出格式')}>
+          <span className="session-format-label">{tr('输出格式')}</span>
+          <div className="session-format-tabs" role="tablist">
+            {SESSION_OUTPUT_FORMATS.map((value) => (
+              <button
+                key={value}
+                type="button"
+                className={format === value ? 'active' : ''}
+                role="tab"
+                aria-selected={format === value}
+                onClick={() => {
+                  setFormat(value);
+                  setCopyState('idle');
+                }}
+              >
+                {SESSION_OUTPUT_LABELS[value]}
+              </button>
+            ))}
+          </div>
+          <label className="session-refresh-toggle">
+            <input
+              type="checkbox"
+              checked={forceRefreshAfterImport}
+              onChange={(event) => setForceRefreshAfterImport(event.target.checked)}
+            />
+            <span>{tr('导入后立即触发刷新 Token')}</span>
+          </label>
+        </div>
 
-        <label className="feature-mode-toggle">
-          <input type="checkbox" checked={strict} onChange={(event) => setStrict(event.target.checked)} />
-          <span>{tr('严格模式')}</span>
-          <small>{tr('遇到无效行时立即停止')}</small>
-        </label>
+        <div className="session-converter-grid">
+          <section className="session-pane" aria-labelledby="session-input-title">
+            <div className="session-pane-header">
+              <div>
+                <h4 id="session-input-title">{tr('Session JSON')}</h4>
+                <span>{sources.length > 1 ? `${sources.length} ${tr('个文件')}` : tr('输入数据')}</span>
+              </div>
+              <div className="session-pane-actions">
+                <button type="button" className="btn btn-ghost session-action-btn" onClick={() => fileInputRef.current?.click()}>
+                  <svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 16V4m0 0L7 9m5-5l5 5M5 20h14" /></svg>
+                  {tr('选择文件')}
+                </button>
+                <button type="button" className="btn btn-ghost session-action-btn" onClick={() => setPastedInput(EXAMPLE_SESSION)}>
+                  {tr('填入示例')}
+                </button>
+                <button type="button" className="btn btn-ghost session-icon-btn" aria-label={tr('清空')} title={tr('清空')} onClick={clearInput} disabled={!inputText}>
+                  <svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M6 7h12m-9 0V5h6v2m-7 0l1 13h6l1-13M10 11v5m4-5v5" /></svg>
+                </button>
+              </div>
+            </div>
 
-        {error && <div className="alert alert-error">{error}</div>}
+            <input
+              ref={fileInputRef}
+              hidden
+              multiple
+              type="file"
+              accept=".json,.txt,application/json,text/plain"
+              onChange={(event) => void readFiles(Array.from(event.target.files || []))}
+            />
+            <div
+              className={`session-input-shell${isDragging ? ' is-dragging' : ''}`}
+              onDragEnter={(event) => {
+                event.preventDefault();
+                setIsDragging(true);
+              }}
+              onDragOver={(event) => event.preventDefault()}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsDragging(false);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setIsDragging(false);
+                void readFiles(Array.from(event.dataTransfer.files));
+              }}
+            >
+              <textarea
+                value={inputText}
+                onChange={(event) => setPastedInput(event.target.value)}
+                spellCheck={false}
+                aria-label={tr('Session JSON 输入')}
+                placeholder={'{\n  "user": { "email": "name@example.com" },\n  "accessToken": "..."\n}'}
+              />
+              {isDragging && <div className="session-drop-overlay">{tr('释放以读取文件')}</div>}
+            </div>
+            {readError && <div className="alert alert-error session-read-error">{readError}</div>}
+            <div className={`session-status-line ${result?.outputAccounts ? 'is-ok' : ''}`}>
+              <span aria-hidden="true" />
+              {result
+                ? `${tr('识别')} ${result.inputAccounts}, ${tr('转换')} ${result.outputAccounts}`
+                : tr('等待输入')}
+            </div>
+          </section>
+
+          <section className="session-pane" aria-labelledby="session-output-title">
+            <div className="session-pane-header">
+              <div>
+                <h4 id="session-output-title">{tr('转换结果')}</h4>
+                <span>{SESSION_OUTPUT_LABELS[format]}</span>
+              </div>
+              <div className="session-pane-actions">
+                <button type="button" className="btn btn-ghost session-action-btn" onClick={() => void copyOutput()} disabled={!result?.outputText}>
+                  <svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8 8h10v11H8zM6 16H4V5h10v2" /></svg>
+                  {copyState === 'copied' ? tr('已复制') : tr('复制')}
+                </button>
+                <button type="button" className="btn btn-primary session-action-btn" onClick={downloadOutput} disabled={!result?.outputText}>
+                  <svg aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14" /></svg>
+                  {format === 'cpa' && (result?.outputAccounts || 0) > 1 ? tr('下载 ZIP') : tr('下载 JSON')}
+                </button>
+              </div>
+            </div>
+
+            <textarea
+              ref={outputRef}
+              className="session-output"
+              value={result?.outputText || ''}
+              readOnly
+              spellCheck={false}
+              aria-label={tr('转换输出')}
+              placeholder={tr('转换后将在此显示 JSON')}
+            />
+            <div className="session-status-line">
+              <span aria-hidden="true" />
+              {result?.outputText ? tr('输出已就绪') : tr('暂无输出')}
+            </div>
+          </section>
+        </div>
+
         {result && (
           <div className="feature-result">
-            <div className="feature-result-stats">
-              <span><strong>{result.inputAccounts}</strong>{tr(' 个输入账号')}</span>
-              <span><strong>{result.outputAccounts}</strong>{tr(' 个输出账号')}</span>
-              <span><strong>{result.issues.length}</strong>{tr(' 条提示')}</span>
+            <div className="feature-result-stats" aria-label={tr('转换统计')}>
+              <span><strong>{result.outputAccounts}</strong>{tr(' 个账号')}</span>
+              <span><strong>{SESSION_OUTPUT_LABELS[format]}</strong>{tr(' 输出格式')}</span>
+              <span><strong>{result.issues.length}</strong>{tr(' 个跳过项')}</span>
             </div>
-            {result.issues.length > 0 && (
-              <div className="feature-issues">
-                {result.issues.slice(0, 5).map((issue, index) => <div key={`${issue.line}-${index}`}>{tr('第')} {issue.line} {tr('行')}：{tr(issue.message)}</div>)}
-                {result.issues.length > 5 && <div>+{result.issues.length - 5} {tr('条')}</div>}
+
+            {result.converted.length > 0 && (
+              <div className="session-preview-wrap">
+                <table className="session-preview-table">
+                  <thead>
+                    <tr>
+                      <th>{tr('名称')}</th>
+                      <th>{tr('邮箱')}</th>
+                      <th>{tr('过期时间')}</th>
+                      <th>{tr('优先级')}</th>
+                      <th>{tr('来源')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.converted.slice(0, 50).map((account, index) => (
+                      <tr key={`${account.sourceName}-${account.sourcePath}-${index}`}>
+                        <td>{account.name}</td>
+                        <td>{account.email || '-'}</td>
+                        <td>{formatDisplayDate(account.effectiveExpiresAt || account.expiresAt)}</td>
+                        <td>{format === 'cpa' || format === 'cockpit' ? account.priority : account.sub2apiPriority}</td>
+                        <td>{account.sourceName}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
-            <button type="button" className="btn btn-primary" onClick={() => downloadResult(result)}>{tr('下载 sub2api JSON')}</button>
+
+            {result.issues.length > 0 && (
+              <div className="feature-issues" role="status">
+                {result.issues.slice(0, 8).map((issue, index) => (
+                  <div key={`${issue.sourceName}-${issue.path}-${index}`}>
+                    <strong>{issue.sourceName}</strong> {issue.path}: {tr(issue.reason)}
+                  </div>
+                ))}
+                {result.issues.length > 8 && <div>+{result.issues.length - 8} {tr('条')}</div>}
+              </div>
+            )}
           </div>
         )}
       </section>
