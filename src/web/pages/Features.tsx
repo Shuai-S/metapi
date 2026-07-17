@@ -69,9 +69,9 @@ export default function Features() {
   const [readError, setReadError] = useState('');
   const [accountModels, setAccountModels] = useState([...DEFAULT_SUB2API_MODELS]);
   const [modelDraft, setModelDraft] = useState('');
-  const [accountConcurrency, setAccountConcurrency] = useState('5');
+  const [accountConcurrency, setAccountConcurrency] = useState('10');
   const [accountRateMultiplier, setAccountRateMultiplier] = useState('0');
-  const [accountPriority, setAccountPriority] = useState('10');
+  const [accountPriority, setAccountPriority] = useState('1');
 
   const hasInput = sources.some((source) => source.text.trim() !== '');
   const result = useMemo(() => {
@@ -81,9 +81,9 @@ export default function Features() {
       forceRefreshAfterImport,
       sub2apiAccountSettings: {
         models: accountModels,
-        concurrency: parseNonNegativeSetting(accountConcurrency, 5, true),
+        concurrency: parseNonNegativeSetting(accountConcurrency, 10, true),
         rateMultiplier: parseNonNegativeSetting(accountRateMultiplier, 0),
-        priority: parseNonNegativeSetting(accountPriority, 10, true),
+        priority: parseNonNegativeSetting(accountPriority, 1, true),
       },
     });
   }, [
