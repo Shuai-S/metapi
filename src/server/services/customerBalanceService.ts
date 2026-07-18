@@ -10,6 +10,7 @@ import { getAdapter } from './platforms/index.js';
 import { formatUtcSqlDateTime } from './localTimeService.js';
 import { withSiteRecordProxyRequestInit } from './siteProxy.js';
 import { normalizePlatformAlias } from '../../shared/platformIdentity.js';
+import { isTokenExpiredError } from './alertRules.js';
 
 const LOW_BALANCE_THRESHOLD = 1;
 const MAX_SYNC_PAGES = 200;
@@ -17,6 +18,13 @@ const MAX_PAGE_SIZE = 100;
 
 type SiteRow = typeof schema.sites.$inferSelect;
 type SiteAccountRow = typeof schema.customerBalanceSiteAccounts.$inferSelect;
+
+class CustomerBalanceUpstreamError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'CustomerBalanceUpstreamError';
+  }
+}
 
 export type CustomerBalanceSiteAccountSummary = {
   id: number;
@@ -172,7 +180,7 @@ async function fetchJsonForSite<T>(
       ? asTrimmedString((payload as { message?: unknown }).message)
         || asTrimmedString((payload as { error?: unknown }).error)
       : '';
-    throw new Error(message || `HTTP ${response.status}`);
+    throw new CustomerBalanceUpstreamError(message || `HTTP ${response.status}`, response.status);
   }
   return payload as T;
 }
@@ -400,6 +408,7 @@ async function loadSiteAndAccount(siteAccountId: number): Promise<{
 async function loginSiteAccount(site: SiteRow, account: SiteAccountRow): Promise<{
   accessToken: string;
   platformUserId: string | null;
+  tokenExpiresAt: number | null;
 }> {
   const password = decryptAccountPassword(account.passwordCipher);
   if (!password) throw new Error('管理员站点账号密码无法解密，请重新保存账号');
@@ -412,7 +421,33 @@ async function loginSiteAccount(site: SiteRow, account: SiteAccountRow): Promise
   return {
     accessToken: normalizeCredentialToken(result.accessToken),
     platformUserId: result.platformUserId ? String(result.platformUserId) : null,
+    tokenExpiresAt: typeof result.tokenExpiresAt === 'number'
+      && Number.isFinite(result.tokenExpiresAt)
+      && result.tokenExpiresAt > 0
+      ? Math.trunc(result.tokenExpiresAt)
+      : null,
   };
+}
+
+async function persistSiteAccountLogin(
+  account: SiteAccountRow,
+  loginResult: Awaited<ReturnType<typeof loginSiteAccount>>,
+): Promise<string> {
+  const platformUserId = loginResult.platformUserId || account.platformUserId || null;
+  await db.update(schema.customerBalanceSiteAccounts)
+    .set({
+      accessToken: loginResult.accessToken,
+      platformUserId,
+      tokenExpiresAt: loginResult.tokenExpiresAt,
+      lastError: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(schema.customerBalanceSiteAccounts.id, account.id))
+    .run();
+  account.accessToken = loginResult.accessToken;
+  account.platformUserId = platformUserId;
+  account.tokenExpiresAt = loginResult.tokenExpiresAt;
+  return loginResult.accessToken;
 }
 
 async function ensureAccessToken(site: SiteRow, account: SiteAccountRow): Promise<string> {
@@ -424,18 +459,46 @@ async function ensureAccessToken(site: SiteRow, account: SiteAccountRow): Promis
     return existing;
   }
   const loginResult = await loginSiteAccount(site, account);
+  return persistSiteAccountLogin(account, loginResult);
+}
+
+function shouldReloginCustomerBalance(error: unknown): boolean {
+  const status = Number((error as { status?: unknown } | null)?.status || 0);
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (isTokenExpiredError({ status: status || undefined, message })) return true;
+
+  // New API may return this as a successful JSON envelope instead of HTTP 401.
+  const text = message.toLowerCase();
+  return (
+    text.includes('unauthorized')
+    || text.includes('not logged in')
+    || text.includes('not logged')
+    || text.includes('no access token provided')
+    || text.includes('未登录且未提供 access token')
+    || text.includes('new-api-user')
+  );
+}
+
+async function reloginCustomerBalanceSiteAccount(
+  site: SiteRow,
+  account: SiteAccountRow,
+  options?: { resetPlatformUserId?: boolean },
+): Promise<string> {
+  // Do not keep retrying a known-invalid session when the password was changed upstream.
   await db.update(schema.customerBalanceSiteAccounts)
     .set({
-      accessToken: loginResult.accessToken,
-      platformUserId: loginResult.platformUserId,
+      accessToken: null,
       tokenExpiresAt: null,
-      lastError: null,
+      ...(options?.resetPlatformUserId ? { platformUserId: null } : {}),
       updatedAt: new Date().toISOString(),
     })
     .where(eq(schema.customerBalanceSiteAccounts.id, account.id))
     .run();
-  account.platformUserId = loginResult.platformUserId;
-  return loginResult.accessToken;
+  account.accessToken = null;
+  account.tokenExpiresAt = null;
+  if (options?.resetPlatformUserId) account.platformUserId = null;
+  const loginResult = await loginSiteAccount(site, account);
+  return persistSiteAccountLogin(account, loginResult);
 }
 
 function isCookieToken(accessToken: string): boolean {
@@ -705,8 +768,18 @@ export async function syncCustomerBalanceSiteAccount(siteAccountId: number): Pro
 }> {
   const { account, site } = await loadSiteAndAccount(siteAccountId);
   try {
-    const accessToken = await ensureAccessToken(site, account);
-    const users = await fetchAllUsers(site, account, accessToken);
+    let accessToken = await ensureAccessToken(site, account);
+    let users: UpstreamCustomerUser[];
+    try {
+      users = await fetchAllUsers(site, account, accessToken);
+    } catch (error) {
+      if (!shouldReloginCustomerBalance(error)) throw error;
+      const message = error instanceof Error ? error.message.toLowerCase() : '';
+      accessToken = await reloginCustomerBalanceSiteAccount(site, account, {
+        resetPlatformUserId: message.includes('new-api-user'),
+      });
+      users = await fetchAllUsers(site, account, accessToken);
+    }
     const summary = calculateSummary(users);
     const now = formatUtcSqlDateTime(new Date());
     const insertedSnapshot = await db.insert(schema.customerBalanceSnapshots)

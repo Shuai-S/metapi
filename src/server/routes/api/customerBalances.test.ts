@@ -242,6 +242,54 @@ describe('customer balance routes', () => {
     expect(account?.platformUserId).toBe('10');
   });
 
+  it('relogs in and retries New API sync after the stored session is rejected', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'New API with expiring session',
+      url: 'https://newapi.example.com',
+      platform: 'new-api',
+    }).returning().get();
+    let loginCount = 0;
+
+    upstreamFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      if (url.endsWith('/api/user/login')) {
+        loginCount += 1;
+        return jsonResponse({ success: true, data: `session-token-${loginCount}` });
+      }
+      if (url.endsWith('/api/user/self')) {
+        return jsonResponse({ success: true, data: { id: 10, username: 'admin', role: 10 } });
+      }
+      if (url.includes('/api/user/?')) {
+        if (headers.get('Authorization') === 'Bearer session-token-1') {
+          return jsonResponse({ success: false, message: 'Unauthorized, not logged in and no access token provided' });
+        }
+        return jsonResponse({
+          success: true,
+          data: { total: 1, items: [{ id: 1, username: 'alice', quota: 1_000_000, used_quota: 0, status: 1 }] },
+        });
+      }
+      return jsonResponse({ success: false, message: `unexpected ${url}` }, 404);
+    });
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/customer-balances/accounts',
+      payload: { siteId: site.id, username: 'admin', password: 'secret' },
+    });
+    const accountId = createResponse.json().account.id;
+    expect((await app.inject({ method: 'POST', url: `/api/customer-balances/accounts/${accountId}/sync` })).statusCode)
+      .toBe(200);
+
+    const retryResponse = await app.inject({
+      method: 'POST',
+      url: `/api/customer-balances/accounts/${accountId}/sync`,
+    });
+
+    expect(retryResponse.statusCode, retryResponse.body).toBe(200);
+    expect(retryResponse.json().snapshot.totalUsers).toBe(1);
+    expect(loginCount).toBe(2);
+  });
+
   it('syncs Sub2API customer balances', async () => {
     const site = await db.insert(schema.sites).values({
       name: 'Sub2API',
@@ -299,5 +347,62 @@ describe('customer balance routes', () => {
     expect(syncResponse.json().users).toEqual([
       expect.objectContaining({ email: 'carol@example.com', balance: 12.5 }),
     ]);
+  });
+
+  it('relogs in and retries Sub2API sync after a 401 response', async () => {
+    const site = await db.insert(schema.sites).values({
+      name: 'Sub2API with expiring token',
+      url: 'https://sub2api.example.com',
+      platform: 'sub2api',
+    }).returning().get();
+    let loginCount = 0;
+
+    upstreamFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      if (url.endsWith('/api/v1/auth/login')) {
+        loginCount += 1;
+        return jsonResponse({
+          code: 0,
+          data: {
+            access_token: `sub-admin-token-${loginCount}`,
+            expires_in: 3600,
+            user: { username: 'admin' },
+          },
+        });
+      }
+      if (url.includes('/api/v1/admin/users?')) {
+        if (headers.get('Authorization') === 'Bearer sub-admin-token-1') {
+          return jsonResponse({ code: 1, message: 'Unauthorized' }, 401);
+        }
+        return jsonResponse({
+          code: 0,
+          data: { total: 1, items: [{ id: 7, email: 'carol@example.com', username: 'carol', role: 'user', status: 'active', balance: 12.5 }] },
+        });
+      }
+      return jsonResponse({ code: 1, message: `unexpected ${url}` }, 404);
+    });
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/customer-balances/accounts',
+      payload: { siteId: site.id, username: 'admin', password: 'secret' },
+    });
+    const accountId = createResponse.json().account.id;
+    expect((await app.inject({ method: 'POST', url: `/api/customer-balances/accounts/${accountId}/sync` })).statusCode)
+      .toBe(200);
+
+    const retryResponse = await app.inject({
+      method: 'POST',
+      url: `/api/customer-balances/accounts/${accountId}/sync`,
+    });
+
+    expect(retryResponse.statusCode, retryResponse.body).toBe(200);
+    expect(retryResponse.json().snapshot.totalUsers).toBe(1);
+    expect(loginCount).toBe(2);
+    const savedAccount = await db.select()
+      .from(schema.customerBalanceSiteAccounts)
+      .where(eq(schema.customerBalanceSiteAccounts.id, accountId))
+      .get();
+    expect(savedAccount?.tokenExpiresAt).toBeGreaterThan(Date.now());
   });
 });
