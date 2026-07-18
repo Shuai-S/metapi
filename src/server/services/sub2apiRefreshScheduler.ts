@@ -1,13 +1,18 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { getSub2ApiAuthFromExtraConfig } from './accountExtraConfig.js';
+import {
+  getAutoReloginConfig,
+  getSub2ApiAuthFromExtraConfig,
+} from './accountExtraConfig.js';
 import {
   isManagedSub2ApiTokenDue,
   isSub2ApiPlatform,
 } from './sub2apiManagedAuth.js';
 import { refreshSub2ApiManagedSessionSingleflight } from './sub2apiRefreshSingleflight.js';
+import { autoReloginAccountWithStoredPasswordSingleflight } from './accountSessionReloginService.js';
 
 const ACTIVE_STATUS = 'active';
+const EXPIRED_STATUS = 'expired';
 const SUB2API_PLATFORM = 'sub2api';
 const SUB2API_REFRESH_SCHEDULER_INTERVAL_MS = 60_000;
 export const SUB2API_REFRESH_SCHEDULER_CONCURRENCY = 4;
@@ -41,13 +46,35 @@ function shouldRefreshManagedSub2ApiAccount(input: {
   nowMs: number;
 }): boolean {
   if (!isSub2ApiPlatform(input.site.platform)) return false;
-  if (normalizeLifecycleStatus(input.account.status) !== ACTIVE_STATUS) return false;
   if (normalizeLifecycleStatus(input.site.status) !== ACTIVE_STATUS) return false;
+
+  const accountStatus = normalizeLifecycleStatus(input.account.status);
+  if (accountStatus === EXPIRED_STATUS) {
+    return !!getAutoReloginConfig(input.account.extraConfig);
+  }
+  if (accountStatus !== ACTIVE_STATUS) return false;
 
   const managedAuth = getSub2ApiAuthFromExtraConfig(input.account.extraConfig);
   if (!managedAuth?.refreshToken || !managedAuth.tokenExpiresAt) return false;
 
   return isManagedSub2ApiTokenDue(managedAuth.tokenExpiresAt, input.nowMs);
+}
+
+async function tryStoredPasswordRecovery(accountId: number): Promise<{
+  success: boolean;
+  message: string;
+}> {
+  try {
+    const relogin = await autoReloginAccountWithStoredPasswordSingleflight(accountId);
+    return relogin.success
+      ? { success: true, message: '' }
+      : { success: false, message: relogin.message };
+  } catch (error) {
+    return {
+      success: false,
+      message: (error as Error)?.message || 'unknown error',
+    };
+  }
 }
 
 export async function executeSub2ApiManagedRefreshPass(input: {
@@ -60,7 +87,7 @@ export async function executeSub2ApiManagedRefreshPass(input: {
     .from(schema.accounts)
     .innerJoin(schema.sites, eq(schema.accounts.siteId, schema.sites.id))
     .where(and(
-      sql`${normalizedLifecycleStatusSql(schema.accounts.status)} = ${ACTIVE_STATUS}`,
+      sql`${normalizedLifecycleStatusSql(schema.accounts.status)} in (${ACTIVE_STATUS}, ${EXPIRED_STATUS})`,
       sql`${normalizedLifecycleStatusSql(schema.sites.status)} = ${ACTIVE_STATUS}`,
       sql`${normalizedPlatformSql(schema.sites.platform)} = ${SUB2API_PLATFORM}`,
     ))
@@ -83,6 +110,19 @@ export async function executeSub2ApiManagedRefreshPass(input: {
       cursor += 1;
       if (!row) return;
 
+      if (normalizeLifecycleStatus(row.accounts.status) === EXPIRED_STATUS) {
+        const relogin = await tryStoredPasswordRecovery(row.accounts.id);
+        if (relogin.success) {
+          refreshedAccountIds.push(row.accounts.id);
+        } else {
+          failedAccountIds.push(row.accounts.id);
+          console.warn(
+            `[sub2api-refresh] failed to recover expired account ${row.accounts.id} with stored password: ${relogin.message}`,
+          );
+        }
+        continue;
+      }
+
       try {
         await refreshSub2ApiManagedSessionSingleflight({
           account: row.accounts,
@@ -92,9 +132,14 @@ export async function executeSub2ApiManagedRefreshPass(input: {
         });
         refreshedAccountIds.push(row.accounts.id);
       } catch (error) {
+        const relogin = await tryStoredPasswordRecovery(row.accounts.id);
+        if (relogin.success) {
+          refreshedAccountIds.push(row.accounts.id);
+          continue;
+        }
         failedAccountIds.push(row.accounts.id);
         console.warn(
-          `[sub2api-refresh] failed to refresh account ${row.accounts.id}: ${(error as Error)?.message || 'unknown error'}`,
+          `[sub2api-refresh] failed to refresh account ${row.accounts.id}: ${(error as Error)?.message || 'unknown error'}; password relogin: ${relogin.message}`,
         );
       }
     }

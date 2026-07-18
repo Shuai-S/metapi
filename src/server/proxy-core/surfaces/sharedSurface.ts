@@ -19,6 +19,10 @@ import { refreshOauthAccessTokenSingleflight } from '../../services/oauth/refres
 import { proxyChannelCoordinator } from '../../services/proxyChannelCoordinator.js';
 import { readRuntimeResponseText } from '../executors/types.js';
 import { selectProxyChannelForAttempt } from '../channelSelection.js';
+import {
+  autoReloginAccountWithStoredPasswordSingleflight,
+  type AccountPasswordReloginResult,
+} from '../../services/accountSessionReloginService.js';
 
 type SelectedChannel = Awaited<ReturnType<typeof tokenRouter.selectChannel>>;
 type SurfaceWarningScope = 'chat' | 'responses';
@@ -51,6 +55,26 @@ type SurfaceOauthRefreshSelectedChannel = {
     accessToken?: string | null;
     extraConfig?: string | null;
   };
+  tokenValue: string;
+};
+
+type SurfacePasswordReloginSelectedChannel = {
+  account: {
+    id: number;
+    accessToken?: string | null;
+    apiToken?: string | null;
+    extraConfig?: string | null;
+  };
+  site: {
+    id?: number;
+    url?: string;
+    platform?: string;
+  };
+  token?: {
+    name?: string | null;
+    token?: string | null;
+    tokenGroup?: string | null;
+  } | null;
   tokenValue: string;
 };
 
@@ -299,6 +323,98 @@ export async function trySurfaceOauthRefreshRecovery<TRequest extends BuiltEndpo
       accessToken: refreshed.accessToken,
       extraConfig: refreshed.extraConfig ?? input.selected.account.extraConfig,
     };
+
+    const refreshedRequest = input.buildRequest(input.ctx.request.endpoint);
+    const refreshedTargetUrl = buildUpstreamUrl(input.siteUrl, refreshedRequest.path);
+    const refreshedResponse = await input.dispatchRequest(refreshedRequest, refreshedTargetUrl);
+    if (refreshedResponse.ok) {
+      return {
+        upstream: refreshedResponse,
+        upstreamPath: refreshedRequest.path,
+        request: refreshedRequest,
+        targetUrl: refreshedTargetUrl,
+      };
+    }
+
+    input.ctx.request = refreshedRequest;
+    input.ctx.response = refreshedResponse;
+    if (input.captureFailureBody !== false) {
+      const failureBody = await readRuntimeResponseText(refreshedResponse).catch(() => '');
+      input.ctx.rawErrText = failureBody.trim() || 'unknown error';
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function resolvePasswordReloginProxyToken(
+  selected: SurfacePasswordReloginSelectedChannel,
+  result: Extract<AccountPasswordReloginResult, { success: true }>,
+): string | null {
+  const previousSessionToken = String(selected.account.accessToken || '').trim();
+  if (previousSessionToken && selected.tokenValue === previousSessionToken) {
+    return result.accessToken;
+  }
+
+  const tokenName = String(selected.token?.name || '').trim();
+  const tokenGroup = String(selected.token?.tokenGroup || '').trim();
+  const matchingToken = result.apiTokens.find((candidate) => {
+    if (candidate.enabled === false || !candidate.key?.trim()) return false;
+    if (tokenName && candidate.name?.trim() === tokenName) return true;
+    return !!tokenGroup && (
+      candidate.tokenGroup?.trim() === tokenGroup
+      || candidate.tokenGroupName?.trim() === tokenGroup
+    );
+  });
+  if (matchingToken?.key?.trim()) return matchingToken.key.trim();
+
+  const previousApiToken = String(selected.account.apiToken || '').trim();
+  if (!selected.token || (previousApiToken && selected.tokenValue === previousApiToken)) {
+    return result.preferredApiToken;
+  }
+  return result.preferredApiToken;
+}
+
+export async function trySurfacePasswordReloginRecovery<TRequest extends BuiltEndpointRequest>(input: {
+  ctx: SurfaceOauthRefreshContext<TRequest>;
+  selected: SurfacePasswordReloginSelectedChannel;
+  siteUrl: string;
+  buildRequest: (endpoint: TRequest['endpoint']) => TRequest;
+  dispatchRequest: (
+    request: TRequest,
+    targetUrl: string,
+  ) => Promise<Awaited<ReturnType<typeof dispatchRuntimeRequest>>>;
+  captureFailureBody?: boolean;
+}): Promise<{
+  upstream: Awaited<ReturnType<typeof dispatchRuntimeRequest>>;
+  upstreamPath: string;
+  request?: TRequest;
+  targetUrl?: string;
+} | null> {
+  try {
+    const relogin = await autoReloginAccountWithStoredPasswordSingleflight(
+      input.selected.account.id,
+    );
+    if (!relogin.success) return null;
+
+    const nextTokenValue = resolvePasswordReloginProxyToken(input.selected, relogin);
+    input.selected.account = {
+      ...input.selected.account,
+      accessToken: relogin.accessToken,
+      apiToken: relogin.preferredApiToken ?? input.selected.account.apiToken,
+      extraConfig: relogin.extraConfig ?? input.selected.account.extraConfig,
+    };
+    if (!nextTokenValue) return null;
+
+    input.selected.tokenValue = nextTokenValue;
+    if (input.selected.token) {
+      input.selected.token = {
+        ...input.selected.token,
+        token: nextTokenValue,
+      };
+    }
 
     const refreshedRequest = input.buildRequest(input.ctx.request.endpoint);
     const refreshedTargetUrl = buildUpstreamUrl(input.siteUrl, refreshedRequest.path);
@@ -631,6 +747,18 @@ export function createSurfaceFailureToolkit(input: {
         totalTokens: args.totalTokens,
         upstreamPath: args.upstreamPath,
       });
+
+      if (isTokenExpiredError({
+        status: args.failure.status,
+        message: args.failure.reason,
+      })) {
+        runBestEffort('report token expired', () => reportTokenExpired({
+          accountId: args.selected.account.id,
+          username: args.selected.account.username,
+          siteName: args.selected.site.name,
+          detail: args.failure.reason,
+        }));
+      }
 
       if (shouldRetryProxyRequest(args.failure.status, args.failure.reason)) {
         const retry = maybeRetry(args.retryCount);

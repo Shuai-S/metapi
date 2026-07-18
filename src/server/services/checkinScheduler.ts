@@ -9,6 +9,7 @@ import { sendNotification } from './notifyService.js';
 import { buildDailySummaryNotification, collectDailySummaryMetrics } from './dailySummaryService.js';
 import { cleanupConfiguredLogs } from './logCleanupService.js';
 import { normalizeLogCleanupRetentionDays } from '../shared/logCleanupRetentionDays.js';
+import { getAutoReloginConfig } from './accountExtraConfig.js';
 
 export type CheckinScheduleMode = 'cron' | 'interval';
 
@@ -110,7 +111,17 @@ async function runIntervalCheckinPass(now = new Date()) {
 
   const dueAccountIds = selectDueIntervalCheckinAccountIds(
     rows
-      .filter((row: any) => row.accounts?.checkinEnabled === true && row.accounts?.status === 'active' && row.sites?.status !== 'disabled')
+      .filter((row: any) => (
+        row.accounts?.checkinEnabled === true
+        && row.sites?.status !== 'disabled'
+        && (
+          row.accounts?.status === 'active'
+          || (
+            row.accounts?.status === 'expired'
+            && !!getAutoReloginConfig(row.accounts?.extraConfig)
+          )
+        )
+      ))
       .map((row: any) => ({
         id: row.accounts.id,
         lastCheckinAt: row.accounts.lastCheckinAt,

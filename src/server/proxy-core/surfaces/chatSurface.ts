@@ -66,6 +66,7 @@ import {
   recordSurfaceSuccess,
   selectSurfaceChannelForAttempt,
   trySurfaceOauthRefreshRecovery,
+  trySurfacePasswordReloginRecovery,
 } from './sharedSurface.js';
 import { runWithSiteApiEndpointPool, SiteApiEndpointRequestError } from '../../services/siteApiEndpointService.js';
 import {
@@ -410,6 +411,18 @@ export async function handleChatSurfaceRequest(
       const tryRecover = async (ctx: Parameters<NonNullable<typeof endpointStrategy.tryRecover>>[0]) => {
         if ((ctx.response.status === 401 || ctx.response.status === 403) && oauth) {
           const recovered = await trySurfaceOauthRefreshRecovery({
+            ctx,
+            selected,
+            siteUrl: siteApiBaseUrl,
+            buildRequest: (endpoint) => buildEndpointRequest(endpoint),
+            dispatchRequest,
+          });
+          if (recovered?.upstream?.ok) {
+            return recovered;
+          }
+        }
+        if ((ctx.response.status === 401 || ctx.response.status === 403) && !oauth) {
+          const recovered = await trySurfacePasswordReloginRecovery({
             ctx,
             selected,
             siteUrl: siteApiBaseUrl,
@@ -1336,20 +1349,29 @@ export async function handleClaudeCountTokensSurfaceRequest(
         let upstream = await dispatchRequest(upstreamRequest);
         let recoverApplied = false;
 
-        if ((upstream.status === 401 || upstream.status === 403) && oauth) {
+        if (upstream.status === 401 || upstream.status === 403) {
           const recoverContext = {
             request: upstreamRequest,
             response: upstream,
             rawErrText: '',
           };
-          const recovered = await trySurfaceOauthRefreshRecovery({
-            ctx: recoverContext,
-            selected,
-            siteUrl: target.baseUrl,
-            buildRequest: () => buildRequest(),
-            dispatchRequest,
-            captureFailureBody: false,
-          });
+          const recovered = oauth
+            ? await trySurfaceOauthRefreshRecovery({
+                ctx: recoverContext,
+                selected,
+                siteUrl: target.baseUrl,
+                buildRequest: () => buildRequest(),
+                dispatchRequest,
+                captureFailureBody: false,
+              })
+            : await trySurfacePasswordReloginRecovery({
+                ctx: recoverContext,
+                selected,
+                siteUrl: target.baseUrl,
+                buildRequest: () => buildRequest(),
+                dispatchRequest,
+                captureFailureBody: false,
+              });
           if (recovered?.upstream?.ok) {
             upstreamRequest = buildRequest();
             upstream = recovered.upstream;

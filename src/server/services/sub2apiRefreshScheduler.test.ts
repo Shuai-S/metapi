@@ -4,9 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const refreshSub2ApiManagedSessionSingleflightMock = vi.fn();
+const autoReloginAccountWithStoredPasswordSingleflightMock = vi.fn();
 
 vi.mock('./sub2apiRefreshSingleflight.js', () => ({
   refreshSub2ApiManagedSessionSingleflight: (...args: unknown[]) => refreshSub2ApiManagedSessionSingleflightMock(...args),
+}));
+
+vi.mock('./accountSessionReloginService.js', () => ({
+  autoReloginAccountWithStoredPasswordSingleflight: (...args: unknown[]) => (
+    autoReloginAccountWithStoredPasswordSingleflightMock(...args)
+  ),
 }));
 
 vi.mock('./sub2apiManagedAuth.js', async (importOriginal) => {
@@ -68,6 +75,13 @@ describe('sub2apiRefreshScheduler', () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     refreshSub2ApiManagedSessionSingleflightMock.mockReset();
+    autoReloginAccountWithStoredPasswordSingleflightMock.mockReset();
+    autoReloginAccountWithStoredPasswordSingleflightMock.mockResolvedValue({
+      success: false,
+      accountId: -1,
+      reason: 'credentials_unavailable',
+      message: 'no stored password',
+    });
     await stopSub2ApiManagedRefreshScheduler();
     await resetSub2ApiManagedRefreshSchedulerForTests();
 
@@ -286,5 +300,127 @@ describe('sub2apiRefreshScheduler', () => {
       failed: 0,
       skipped: 1,
     });
+  });
+
+  it('falls back to stored-password login when managed refresh is rejected', async () => {
+    const nowMs = Date.parse('2026-04-06T02:00:00.000Z');
+    const site = await db.insert(schema.sites).values({
+      name: 'sub2-password-fallback-site',
+      url: 'https://sub2-password-fallback.example.com',
+      platform: 'sub2api',
+      status: 'active',
+    }).returning().get();
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'password-fallback@example.com',
+      accessToken: 'expired-access-token',
+      status: 'active',
+      extraConfig: buildSub2ApiExtraConfig({
+        refreshToken: 'invalid-refresh-token',
+        tokenExpiresAt: nowMs - 1_000,
+      }),
+    }).returning().get();
+    refreshSub2ApiManagedSessionSingleflightMock.mockRejectedValue(
+      new Error('HTTP 401: invalid refresh token (REFRESH_TOKEN_INVALID)'),
+    );
+    autoReloginAccountWithStoredPasswordSingleflightMock.mockResolvedValue({
+      success: true,
+      accountId: account.id,
+      accessToken: 'fresh-session-token',
+    });
+
+    const result = await executeSub2ApiManagedRefreshPass({ nowMs });
+
+    expect(result).toMatchObject({
+      scanned: 1,
+      refreshed: 1,
+      failed: 0,
+      skipped: 0,
+      refreshedAccountIds: [account.id],
+      failedAccountIds: [],
+    });
+    expect(autoReloginAccountWithStoredPasswordSingleflightMock).toHaveBeenCalledWith(account.id);
+  });
+
+  it('directly recovers an expired password account without retrying its invalid refresh token', async () => {
+    const nowMs = Date.parse('2026-04-06T02:00:00.000Z');
+    const site = await db.insert(schema.sites).values({
+      name: 'sub2-expired-password-site',
+      url: 'https://sub2-expired-password.example.com',
+      platform: 'sub2api',
+      status: 'active',
+    }).returning().get();
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'expired-password@example.com',
+      accessToken: 'expired-access-token',
+      status: 'expired',
+      extraConfig: JSON.stringify({
+        credentialMode: 'session',
+        autoRelogin: {
+          username: 'expired-password@example.com',
+          passwordCipher: 'encrypted-password',
+        },
+        sub2apiAuth: {
+          refreshToken: 'invalid-refresh-token',
+          tokenExpiresAt: nowMs - 1_000,
+        },
+      }),
+    }).returning().get();
+    autoReloginAccountWithStoredPasswordSingleflightMock.mockResolvedValue({
+      success: true,
+      accountId: account.id,
+      accessToken: 'fresh-session-token',
+    });
+
+    const result = await executeSub2ApiManagedRefreshPass({ nowMs });
+
+    expect(result).toMatchObject({
+      scanned: 1,
+      refreshed: 1,
+      failed: 0,
+      skipped: 0,
+      refreshedAccountIds: [account.id],
+    });
+    expect(refreshSub2ApiManagedSessionSingleflightMock).not.toHaveBeenCalled();
+    expect(autoReloginAccountWithStoredPasswordSingleflightMock).toHaveBeenCalledWith(account.id);
+  });
+
+  it('continues the refresh pass when password relogin throws', async () => {
+    const nowMs = Date.parse('2026-04-06T02:00:00.000Z');
+    const site = await db.insert(schema.sites).values({
+      name: 'sub2-password-error-site',
+      url: 'https://sub2-password-error.example.com',
+      platform: 'sub2api',
+      status: 'active',
+    }).returning().get();
+    const accounts = [];
+    for (const key of ['relogin-error', 'refresh-success']) {
+      accounts.push(await db.insert(schema.accounts).values({
+        siteId: site.id,
+        username: `${key}@example.com`,
+        accessToken: `${key}-access-token`,
+        status: 'active',
+        extraConfig: buildSub2ApiExtraConfig({
+          refreshToken: `${key}-refresh-token`,
+          tokenExpiresAt: nowMs - 1_000,
+        }),
+      }).returning().get());
+    }
+    refreshSub2ApiManagedSessionSingleflightMock.mockImplementation(({ account }) => {
+      if (account.id === accounts[0].id) {
+        return Promise.reject(new Error('refresh rejected'));
+      }
+      return Promise.resolve({ accessToken: 'refreshed-access-token' });
+    });
+    autoReloginAccountWithStoredPasswordSingleflightMock.mockRejectedValue(
+      new Error('database temporarily unavailable'),
+    );
+
+    const result = await executeSub2ApiManagedRefreshPass({ nowMs });
+
+    expect(result.refreshedAccountIds).toEqual([accounts[1].id]);
+    expect(result.failedAccountIds).toEqual([accounts[0].id]);
+    expect(result).toMatchObject({ refreshed: 1, failed: 1 });
   });
 });

@@ -20,6 +20,7 @@ import {
   type AccountCredentialMode,
 } from "../../services/accountExtraConfig.js";
 import { encryptAccountPassword } from "../../services/accountCredentialService.js";
+import { reauthorizeAccountWithPassword } from "../../services/accountSessionReloginService.js";
 import { applyAccountUpdateWorkflow } from "../../services/accountUpdateWorkflow.js";
 import { startBackgroundTask } from "../../services/backgroundTaskService.js";
 import { parseCheckinRewardAmount } from "../../services/checkinRewardParser.js";
@@ -45,6 +46,7 @@ import {
   parseAccountHealthRefreshPayload,
   parseAccountLoginPayload,
   parseAccountManualModelsPayload,
+  parseAccountRebindPasswordPayload,
   parseAccountRebindSessionPayload,
   parseAccountUpdatePayload,
   parseAccountVerifyTokenPayload,
@@ -1117,6 +1119,69 @@ export async function accountsRoutes(app: FastifyInstance) {
           credentialMode === "session"
             ? "Session Token 验证失败"
             : "Token invalid: cannot use it as session cookie or API key",
+      };
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: unknown }>(
+    "/api/accounts/:id/rebind-password",
+    { preHandler: [limitAccountLogin] },
+    async (request, reply) => {
+      const parsedBody = parseAccountRebindPasswordPayload(request.body);
+      if (!parsedBody.success) {
+        return reply
+          .code(400)
+          .send({ success: false, message: parsedBody.error });
+      }
+
+      const accountId = Number.parseInt(request.params.id, 10);
+      if (!Number.isFinite(accountId) || accountId <= 0) {
+        return reply
+          .code(400)
+          .send({ success: false, message: "账号 ID 无效" });
+      }
+
+      const result = await reauthorizeAccountWithPassword({
+        accountId,
+        username: parsedBody.data.username,
+        password: parsedBody.data.password,
+      });
+      if (!result.success) {
+        return reply
+          .code(result.reason === "account_not_found" ? 404 : 400)
+          .send({
+            success: false,
+            message: result.message,
+            shieldBlocked: result.shieldBlocked === true,
+          });
+      }
+
+      const convergence = await convergeAccountMutation({
+        accountId,
+        preferredApiToken: result.preferredApiToken,
+        defaultTokenSource: "password-relogin",
+        refreshBalance: true,
+        refreshModels: true,
+        rebuildRoutes: true,
+        continueOnError: true,
+      });
+      const latest = await db
+        .select()
+        .from(schema.accounts)
+        .where(eq(schema.accounts.id, accountId))
+        .get();
+
+      return {
+        success: true,
+        account: latest,
+        tokenType: "session",
+        credentialMode: "session",
+        capabilities: latest
+          ? buildCapabilitiesForAccount(latest)
+          : buildCapabilitiesFromCredentialMode("session", true, null),
+        apiTokenFound: !!result.preferredApiToken,
+        refreshedBalance: convergence.refreshedBalance,
+        refreshedModels: convergence.refreshedModels,
       };
     },
   );

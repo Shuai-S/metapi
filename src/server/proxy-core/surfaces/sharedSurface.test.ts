@@ -22,6 +22,7 @@ const recordSuccessMock = vi.fn();
 const resolveProxyUsageWithSelfLogFallbackMock = vi.fn();
 const resolveProxyLogBillingMock = vi.fn();
 const refreshOauthAccessTokenSingleflightMock = vi.fn();
+const autoReloginAccountWithStoredPasswordSingleflightMock = vi.fn();
 const getStickyChannelIdMock = vi.fn();
 const bindStickyChannelMock = vi.fn();
 const clearStickyChannelMock = vi.fn();
@@ -106,6 +107,12 @@ vi.mock('../../services/oauth/refreshSingleflight.js', () => ({
   refreshOauthAccessTokenSingleflight: (...args: unknown[]) => refreshOauthAccessTokenSingleflightMock(...args),
 }));
 
+vi.mock('../../services/accountSessionReloginService.js', () => ({
+  autoReloginAccountWithStoredPasswordSingleflight: (...args: unknown[]) => (
+    autoReloginAccountWithStoredPasswordSingleflightMock(...args)
+  ),
+}));
+
 describe('selectSurfaceChannelForAttempt', () => {
   afterAll(() => {
     consoleWarnMock.mockRestore();
@@ -134,6 +141,7 @@ describe('selectSurfaceChannelForAttempt', () => {
     resolveProxyUsageWithSelfLogFallbackMock.mockReset();
     resolveProxyLogBillingMock.mockReset();
     refreshOauthAccessTokenSingleflightMock.mockReset();
+    autoReloginAccountWithStoredPasswordSingleflightMock.mockReset();
     getStickyChannelIdMock.mockReset();
     bindStickyChannelMock.mockReset();
     clearStickyChannelMock.mockReset();
@@ -907,6 +915,84 @@ describe('selectSurfaceChannelForAttempt', () => {
     expect(ctx.request.headers).toEqual({ authorization: 'Bearer new-access-token' });
     expect(ctx.response).toBe(refreshedResponse);
     expect(ctx.rawErrText).toBe('account mismatch');
+  });
+
+  it('retries a failed proxy request with API credentials refreshed by password login', async () => {
+    const refreshedResponse = {
+      ok: true,
+      status: 200,
+      text: vi.fn(),
+    };
+    const selected = {
+      account: {
+        id: 44,
+        accessToken: 'expired-session-token',
+        apiToken: 'sk-expired-token',
+        extraConfig: '{"autoRelogin":{"username":"demo","passwordCipher":"cipher"}}',
+      },
+      site: {
+        id: 55,
+        url: 'https://password-upstream.example.com',
+        platform: 'new-api',
+      },
+      token: {
+        name: 'default',
+        token: 'sk-expired-token',
+        tokenGroup: 'default',
+      },
+      tokenValue: 'sk-expired-token',
+    };
+    const ctx = {
+      request: {
+        endpoint: 'chat' as const,
+        path: '/v1/chat/completions',
+        headers: { authorization: 'Bearer sk-expired-token' },
+        body: { model: 'gpt-4.1' },
+      },
+      response: {
+        ok: false,
+        status: 401,
+        text: vi.fn(),
+      },
+      rawErrText: 'invalid token',
+    };
+    autoReloginAccountWithStoredPasswordSingleflightMock.mockResolvedValue({
+      success: true,
+      accountId: 44,
+      username: 'demo',
+      accessToken: 'fresh-session-token',
+      preferredApiToken: 'sk-fresh-token',
+      apiTokens: [
+        { name: 'default', key: 'sk-fresh-token', enabled: true, tokenGroup: 'default' },
+      ],
+      extraConfig: '{"autoRelogin":{"username":"demo","passwordCipher":"cipher"}}',
+      account: null,
+    });
+    const dispatchRequest = vi.fn().mockResolvedValue(refreshedResponse);
+
+    const { trySurfacePasswordReloginRecovery } = await import('./sharedSurface.js');
+    const result = await trySurfacePasswordReloginRecovery({
+      ctx,
+      selected,
+      siteUrl: selected.site.url,
+      buildRequest: () => ({
+        endpoint: 'chat',
+        path: '/v1/chat/completions',
+        headers: { authorization: `Bearer ${selected.tokenValue}` },
+        body: { model: 'gpt-4.1' },
+      }),
+      dispatchRequest,
+    });
+
+    expect(autoReloginAccountWithStoredPasswordSingleflightMock).toHaveBeenCalledWith(44);
+    expect(selected.account.accessToken).toBe('fresh-session-token');
+    expect(selected.account.apiToken).toBe('sk-fresh-token');
+    expect(selected.tokenValue).toBe('sk-fresh-token');
+    expect(selected.token.token).toBe('sk-fresh-token');
+    expect(dispatchRequest).toHaveBeenCalledWith(expect.objectContaining({
+      headers: { authorization: 'Bearer sk-fresh-token' },
+    }), 'https://password-upstream.example.com/v1/chat/completions');
+    expect(result?.upstream).toBe(refreshedResponse);
   });
 
   it('records shared success bookkeeping with usage fallback, billing, and success logging', async () => {

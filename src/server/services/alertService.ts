@@ -4,16 +4,33 @@ import { sendNotification } from './notifyService.js';
 import { setAccountRuntimeHealth } from './accountHealthService.js';
 import { appendSessionTokenRebindHint } from './alertRules.js';
 import { formatUtcSqlDateTime } from './localTimeService.js';
+import { autoReloginAccountWithStoredPasswordSingleflight } from './accountSessionReloginService.js';
 
 export async function reportTokenExpired(params: {
   accountId: number;
   username?: string | null;
   siteName?: string | null;
   detail?: string;
+  attemptPasswordRelogin?: boolean;
 }) {
+  let autoReloginFailure = '';
+  if (params.attemptPasswordRelogin !== false) {
+    const relogin = await autoReloginAccountWithStoredPasswordSingleflight(params.accountId);
+    if (relogin.success) {
+      return { recovered: true as const, account: relogin.account };
+    }
+    if (relogin.reason !== 'credentials_unavailable') {
+      autoReloginFailure = relogin.message;
+    }
+  }
+
   const accountLabel = params.username || `ID:${params.accountId}`;
   const siteLabel = params.siteName || 'unknown-site';
-  const detailText = params.detail ? appendSessionTokenRebindHint(params.detail) : '';
+  const rawDetail = [
+    params.detail,
+    autoReloginFailure ? `账号密码自动重登录失败: ${autoReloginFailure}` : '',
+  ].filter(Boolean).join('; ');
+  const detailText = rawDetail ? appendSessionTokenRebindHint(rawDetail) : '';
   const detail = detailText ? ` (${detailText})` : '';
   const createdAt = formatUtcSqlDateTime(new Date());
 
@@ -43,6 +60,8 @@ export async function reportTokenExpired(params: {
     `${accountLabel} @ ${siteLabel} 的 Token 无效或已过期${detail}`,
     'error',
   );
+
+  return { recovered: false as const };
 }
 
 export async function reportProxyAllFailed(params: { model: string; reason: string }) {

@@ -846,6 +846,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  rebindAccountPassword: (
+    id: number,
+    data: {
+      username?: string;
+      password?: string;
+    },
+  ) =>
+    request(`/api/accounts/${id}/rebind-password`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   updateAccount: (id: number, data: any) =>
     request(`/api/accounts/${id}`, {
       method: "PUT",

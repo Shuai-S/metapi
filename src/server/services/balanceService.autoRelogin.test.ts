@@ -14,6 +14,7 @@ const decryptPasswordMock = vi.fn();
 const setAccountRuntimeHealthMock = vi.fn();
 const extractRuntimeHealthMock = vi.fn();
 const undiciFetchMock = vi.fn();
+const autoReloginMock = vi.fn();
 
 vi.mock('../db/index.js', () => {
   const selectChain = {
@@ -74,6 +75,10 @@ vi.mock('./accountCredentialService.js', () => ({
   decryptAccountPassword: (...args: unknown[]) => decryptPasswordMock(...args),
 }));
 
+vi.mock('./accountSessionReloginService.js', () => ({
+  autoReloginAccountWithStoredPasswordSingleflight: (...args: unknown[]) => autoReloginMock(...args),
+}));
+
 vi.mock('./accountHealthService.js', () => ({
   setAccountRuntimeHealth: (...args: unknown[]) => setAccountRuntimeHealthMock(...args),
   extractRuntimeHealth: (...args: unknown[]) => extractRuntimeHealthMock(...args),
@@ -96,8 +101,15 @@ describe('balanceService auto relogin', () => {
     setAccountRuntimeHealthMock.mockReset();
     extractRuntimeHealthMock.mockReset();
     undiciFetchMock.mockReset();
+    autoReloginMock.mockReset();
 
     extractRuntimeHealthMock.mockReturnValue(null);
+    autoReloginMock.mockResolvedValue({
+      success: false,
+      accountId: 0,
+      reason: 'credentials_unavailable',
+      message: 'no stored password',
+    });
     undiciFetchMock.mockResolvedValue({
       ok: false,
       json: async () => ({}),
@@ -129,18 +141,28 @@ describe('balanceService auto relogin', () => {
     adapterMock.getBalance
       .mockRejectedValueOnce(new Error('HTTP 401: access token required'))
       .mockResolvedValueOnce({ balance: 12, used: 1, quota: 13 });
-    decryptPasswordMock.mockReturnValue('plain-password');
-    adapterMock.login.mockResolvedValue({ success: true, accessToken: 'fresh-token' });
+    autoReloginMock.mockResolvedValue({
+      success: true,
+      accountId: 1,
+      accessToken: 'fresh-token',
+      extraConfig: JSON.stringify({
+        platformUserId: 11494,
+        autoRelogin: { username: 'linuxdo_11494', passwordCipher: 'cipher' },
+      }),
+      preferredApiToken: null,
+      apiTokens: [],
+      account: null,
+      username: 'linuxdo_11494',
+    });
 
     const { refreshBalance } = await import('./balanceService.js');
     const result = await refreshBalance(1);
 
     expect(result).toEqual({ balance: 12, used: 1, quota: 13 });
-    expect(adapterMock.login).toHaveBeenCalledTimes(1);
+    expect(autoReloginMock).toHaveBeenCalledWith(1);
     expect(adapterMock.getBalance).toHaveBeenCalledTimes(2);
     expect(adapterMock.getBalance.mock.calls[0][1]).toBe('stale-token');
     expect(adapterMock.getBalance.mock.calls[1][1]).toBe('fresh-token');
-    expect(updateSetMock.mock.calls.some((call) => call[0]?.accessToken === 'fresh-token')).toBe(true);
     expect(reportTokenExpiredMock).not.toHaveBeenCalled();
   });
 
@@ -168,7 +190,7 @@ describe('balanceService auto relogin', () => {
     const { refreshBalance } = await import('./balanceService.js');
     await expect(refreshBalance(2)).rejects.toThrow('access token');
 
-    expect(adapterMock.login).not.toHaveBeenCalled();
+    expect(autoReloginMock).toHaveBeenCalledWith(2);
     expect(reportTokenExpiredMock).toHaveBeenCalledTimes(1);
   });
 
@@ -378,6 +400,77 @@ describe('balanceService auto relogin', () => {
     );
 
     expect(adapterMock.login).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the stored password when the sub2api refresh token is invalid', async () => {
+    selectAllMock.mockReturnValue([
+      {
+        accounts: {
+          id: 9,
+          username: 'sub2-password-user',
+          accessToken: 'expired-access-token',
+          status: 'active',
+          extraConfig: JSON.stringify({
+            autoRelogin: {
+              username: 'sub2-password-user',
+              passwordCipher: 'cipher',
+            },
+            sub2apiAuth: {
+              refreshToken: 'refresh-token-invalid',
+            },
+          }),
+        },
+        sites: {
+          id: 10,
+          name: 'sub2-password',
+          url: 'https://sub2-password.example.com',
+          platform: 'sub2api',
+        },
+      },
+    ]);
+    adapterMock.getBalance
+      .mockRejectedValueOnce(new Error('HTTP 401: unauthorized'))
+      .mockResolvedValueOnce({ balance: 18, used: 2, quota: 20 });
+    undiciFetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      text: async () => JSON.stringify({
+        code: 401,
+        message: 'invalid refresh token',
+        reason: 'REFRESH_TOKEN_INVALID',
+      }),
+      json: async () => ({
+        code: 401,
+        message: 'invalid refresh token',
+        reason: 'REFRESH_TOKEN_INVALID',
+      }),
+    });
+    autoReloginMock.mockResolvedValueOnce({
+      success: true,
+      accountId: 9,
+      username: 'sub2-password-user',
+      accessToken: 'password-access-token',
+      preferredApiToken: null,
+      apiTokens: [],
+      extraConfig: JSON.stringify({
+        autoRelogin: {
+          username: 'sub2-password-user',
+          passwordCipher: 'cipher',
+        },
+        sub2apiAuth: {
+          refreshToken: 'fresh-refresh-token',
+        },
+      }),
+      account: null,
+    });
+
+    const { refreshBalance } = await import('./balanceService.js');
+    const result = await refreshBalance(9);
+
+    expect(result).toEqual({ balance: 18, used: 2, quota: 20 });
+    expect(autoReloginMock).toHaveBeenCalledWith(9);
+    expect(adapterMock.getBalance.mock.calls[1]?.[1]).toBe('password-access-token');
+    expect(reportTokenExpiredMock).not.toHaveBeenCalled();
   });
 
   it('skips balance refresh for api-key-only accounts without expiring them', async () => {

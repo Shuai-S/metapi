@@ -9,6 +9,7 @@ const notifyMock = vi.fn();
 const reportTokenExpiredMock = vi.fn();
 const refreshBalanceMock = vi.fn();
 const decryptPasswordMock = vi.fn();
+const autoReloginMock = vi.fn();
 
 const selectAllMock = vi.fn();
 const insertValuesMock = vi.fn();
@@ -78,6 +79,10 @@ vi.mock('./accountCredentialService.js', () => ({
   decryptAccountPassword: (...args: unknown[]) => decryptPasswordMock(...args),
 }));
 
+vi.mock('./accountSessionReloginService.js', () => ({
+  autoReloginAccountWithStoredPasswordSingleflight: (...args: unknown[]) => autoReloginMock(...args),
+}));
+
 describe('checkinService auto relogin', () => {
   beforeEach(() => {
     adapterMock.checkin.mockReset();
@@ -89,6 +94,13 @@ describe('checkinService auto relogin', () => {
     selectAllMock.mockReset();
     insertValuesMock.mockReset();
     updateSetMock.mockReset();
+    autoReloginMock.mockReset();
+    autoReloginMock.mockResolvedValue({
+      success: false,
+      accountId: 0,
+      reason: 'credentials_unavailable',
+      message: 'no stored password',
+    });
   });
 
   it('retries checkin once after auto relogin when access token is missing', async () => {
@@ -115,19 +127,28 @@ describe('checkinService auto relogin', () => {
     adapterMock.checkin
       .mockResolvedValueOnce({ success: false, message: '无权进行此操作，未登录且未提供 access token' })
       .mockResolvedValueOnce({ success: true, message: 'checked in' });
-    decryptPasswordMock.mockReturnValue('plain-password');
-    adapterMock.login.mockResolvedValue({ success: true, accessToken: 'fresh-token' });
+    autoReloginMock.mockResolvedValue({
+      success: true,
+      accountId: 1,
+      username: 'linuxdo_7659',
+      accessToken: 'fresh-token',
+      preferredApiToken: null,
+      apiTokens: [],
+      extraConfig: JSON.stringify({
+        autoRelogin: { username: 'linuxdo_7659', passwordCipher: 'cipher' },
+      }),
+      account: null,
+    });
 
     const { checkinAccount } = await import('./checkinService.js');
     const result = await checkinAccount(1);
 
     expect(result.success).toBe(true);
-    expect(adapterMock.login).toHaveBeenCalledTimes(1);
+    expect(autoReloginMock).toHaveBeenCalledWith(1);
     expect(adapterMock.checkin).toHaveBeenCalledTimes(2);
     expect(adapterMock.checkin.mock.calls[0][1]).toBe('expired-token');
     expect(adapterMock.checkin.mock.calls[1][1]).toBe('fresh-token');
     expect(adapterMock.checkin.mock.calls[0][2]).toBe(7659);
-    expect(updateSetMock).toHaveBeenCalledWith(expect.objectContaining({ accessToken: 'fresh-token' }));
   });
 
   it('passes guessed platform user id when config does not include it', async () => {

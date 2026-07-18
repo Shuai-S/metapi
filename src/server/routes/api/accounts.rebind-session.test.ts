@@ -6,10 +6,16 @@ import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 
 const verifyTokenMock = vi.fn();
+const loginMock = vi.fn();
+const getApiTokenMock = vi.fn();
+const getApiTokensMock = vi.fn();
 
 vi.mock('../../services/platforms/index.js', () => ({
   getAdapter: () => ({
     verifyToken: (...args: unknown[]) => verifyTokenMock(...args),
+    login: (...args: unknown[]) => loginMock(...args),
+    getApiToken: (...args: unknown[]) => getApiTokenMock(...args),
+    getApiTokens: (...args: unknown[]) => getApiTokensMock(...args),
   }),
 }));
 
@@ -37,6 +43,9 @@ describe('accounts rebind-session api', { timeout: 15_000 }, () => {
 
   beforeEach(async () => {
     verifyTokenMock.mockReset();
+    loginMock.mockReset();
+    getApiTokenMock.mockReset();
+    getApiTokensMock.mockReset();
 
     await db.delete(schema.proxyLogs).run();
     await db.delete(schema.checkinLogs).run();
@@ -185,6 +194,67 @@ describe('accounts rebind-session api', { timeout: 15_000 }, () => {
     expect(latest?.apiToken).toBe('sk-rebound-token');
     expect(latest?.username).toBe('linuxdo_1002');
     expect(latest?.status).toBe('active');
+  });
+
+  it('reactivates an expired account by logging in with its username and password', async () => {
+    loginMock.mockResolvedValueOnce({
+      success: true,
+      accessToken: 'password-session-token',
+      username: 'password-user',
+      platformUserId: 1004,
+    });
+    getApiTokenMock.mockResolvedValueOnce('sk-password-token');
+    getApiTokensMock.mockResolvedValueOnce([
+      { name: 'default', key: 'sk-password-token', enabled: true },
+    ]);
+
+    const site = await db.insert(schema.sites).values({
+      name: 'Password Rebind Site',
+      url: 'https://password-rebind.example.com',
+      platform: 'new-api',
+    }).returning().get();
+    const account = await db.insert(schema.accounts).values({
+      siteId: site.id,
+      username: 'password-user',
+      accessToken: 'expired-access-token',
+      status: 'expired',
+      extraConfig: JSON.stringify({ credentialMode: 'session' }),
+    }).returning().get();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/accounts/${account.id}/rebind-password`,
+      payload: {
+        username: 'password-user',
+        password: 'current-password',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      success: true,
+      tokenType: 'session',
+      credentialMode: 'session',
+      apiTokenFound: true,
+    });
+    expect(loginMock).toHaveBeenCalledWith(
+      site.url,
+      'password-user',
+      'current-password',
+    );
+
+    const latest = await db.select().from(schema.accounts)
+      .where(eq(schema.accounts.id, account.id)).get();
+    const extra = JSON.parse(String(latest?.extraConfig || '{}')) as {
+      autoRelogin?: { username?: string; passwordCipher?: string };
+      platformUserId?: number;
+    };
+    expect(latest?.accessToken).toBe('password-session-token');
+    expect(latest?.apiToken).toBe('sk-password-token');
+    expect(latest?.status).toBe('active');
+    expect(extra.autoRelogin?.username).toBe('password-user');
+    expect(extra.autoRelogin?.passwordCipher).toBeTruthy();
+    expect(extra.platformUserId).toBe(1004);
   });
 
   it('stores managed sub2api refresh token fields when provided during rebind', async () => {

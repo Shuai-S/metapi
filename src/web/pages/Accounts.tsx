@@ -41,6 +41,7 @@ import { parseBatchApiKeys } from "../../shared/apiKeyBatch.js";
 
 type ConnectionsSegment = "session" | "apikey" | "tokens" | "groups";
 type EditableConnectionType = "session" | "apikey" | "password";
+type RebindMode = "session" | "password";
 
 type AccountGroupOption = {
   value: string;
@@ -124,8 +125,15 @@ function createTokenForm(credentialMode: "session" | "apikey" = "session") {
   };
 }
 
-function createRebindForm(platformUserId = "") {
+function createRebindForm(
+  platformUserId = "",
+  mode: RebindMode = "session",
+  username = "",
+) {
   return {
+    mode,
+    username,
+    password: "",
     accessToken: "",
     platformUserId,
     refreshToken: "",
@@ -1472,7 +1480,14 @@ export default function Accounts() {
     closeAddPanel();
     setEditingAccount(null);
     setRebindTarget(account);
-    setRebindForm(createRebindForm(extractPlatformUserId(account)));
+    const connectionDisplay = resolveAccountConnectionDisplay(account);
+    setRebindForm(
+      createRebindForm(
+        extractPlatformUserId(account),
+        connectionDisplay.type === "password" ? "password" : "session",
+        account?.username || "",
+      ),
+    );
     setRebindVerifyResult(null);
   };
 
@@ -1512,6 +1527,37 @@ export default function Accounts() {
       setRebindVerifyResult({ success: false, message: e?.message });
     } finally {
       setRebindVerifying(false);
+    }
+  };
+
+  const handleSubmitPasswordRebind = async () => {
+    if (!rebindTarget) return;
+    const username = rebindForm.username.trim();
+    const password = rebindForm.password;
+    const hasStoredPassword =
+      resolveAccountConnectionDisplay(rebindTarget).type === "password";
+    if (!username) {
+      toast.error("请输入登录账号");
+      return;
+    }
+    if (password.length === 0 && !hasStoredPassword) {
+      toast.error("请输入账号密码");
+      return;
+    }
+
+    setRebindSaving(true);
+    try {
+      await api.rebindAccountPassword(rebindTarget.id, {
+        username,
+        ...(password.length > 0 ? { password } : {}),
+      });
+      toast.success("账号密码重新授权成功，状态已恢复");
+      closeRebindPanel();
+      load(true);
+    } catch (e: any) {
+      toast.error(e.message || "账号密码重新授权失败");
+    } finally {
+      setRebindSaving(false);
     }
   };
 
@@ -3128,7 +3174,11 @@ export default function Accounts() {
             <CenteredModal
               open={Boolean(rebindTarget)}
               onClose={closeRebindPanel}
-              title="重新绑定 Session Token"
+              title={
+                rebindForm.mode === "password"
+                  ? "使用账号密码重新授权"
+                  : "重新绑定 Session Token"
+              }
               maxWidth={820}
               bodyStyle={{ display: "flex", flexDirection: "column", gap: 12 }}
               footer={
@@ -3140,180 +3190,278 @@ export default function Accounts() {
               {activeRebindTarget ? (
                 <>
                   <div
+                    role="tablist"
+                    aria-label="重新授权方式"
+                    style={{
+                      display: "inline-flex",
+                      alignSelf: "flex-start",
+                      padding: 3,
+                      gap: 3,
+                      background: "var(--color-bg)",
+                      border: "1px solid var(--color-border-light)",
+                      borderRadius: "var(--radius-sm)",
+                    }}
+                  >
+                    {(
+                      [
+                        { value: "password", label: "账号密码" },
+                        { value: "session", label: "Session Token" },
+                      ] as Array<{ value: RebindMode; label: string }>
+                    ).map((option) => {
+                      const active = rebindForm.mode === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          role="tab"
+                          aria-selected={active}
+                          onClick={() => {
+                            setRebindForm((prev) => ({
+                              ...prev,
+                              mode: option.value,
+                            }));
+                            setRebindVerifyResult(null);
+                          }}
+                          style={{
+                            minHeight: 32,
+                            padding: "6px 12px",
+                            border: "none",
+                            borderRadius: 6,
+                            cursor: "pointer",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            background: active
+                              ? "var(--color-bg-card)"
+                              : "transparent",
+                            color: active
+                              ? "var(--color-primary)"
+                              : "var(--color-text-muted)",
+                            boxShadow: active ? "var(--shadow-sm)" : "none",
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div
                     style={{
                       fontSize: 12,
                       color: "var(--color-text-muted)",
-                      marginBottom: 12,
                     }}
                   >
                     连接: {resolveAccountDisplayName(activeRebindTarget)} @{" "}
-                    {activeRebindTarget.site?.name || "-"}。请粘贴新的 Session
-                    Token，验证成功后再绑定。
+                    {activeRebindTarget.site?.name || "-"}。
                   </div>
 
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "minmax(0, 1fr) 220px",
-                      gap: 10,
-                      marginBottom: 10,
-                    }}
-                  >
-                    <textarea
-                      placeholder="粘贴新的 Session Token"
-                      value={rebindForm.accessToken}
-                      onChange={(e) => {
-                        setRebindForm((prev) => ({
-                          ...prev,
-                          accessToken: e.target.value.trim(),
-                        }));
-                        setRebindVerifyResult(null);
-                      }}
-                      style={{
-                        ...inputStyle,
-                        fontFamily: "var(--font-mono)",
-                        height: 74,
-                        resize: "none" as const,
-                      }}
-                    />
-                    <input
-                      placeholder="用户 ID（可选）"
-                      value={rebindForm.platformUserId}
-                      onChange={(e) => {
-                        setRebindForm((prev) => ({
-                          ...prev,
-                          platformUserId: e.target.value.replace(/\D/g, ""),
-                        }));
-                        setRebindVerifyResult(null);
-                      }}
-                      style={inputStyle}
-                    />
-                  </div>
-                  {isRebindSub2Api && (
+                  {rebindForm.mode === "password" ? (
                     <>
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "minmax(0, 1fr) 220px",
-                          gap: 10,
-                          marginBottom: 4,
-                        }}
-                      >
+                      <ResponsiveFormGrid>
                         <input
-                          placeholder="Sub2API refresh_token（可选）"
-                          value={rebindForm.refreshToken}
+                          placeholder="登录账号"
+                          value={rebindForm.username}
                           onChange={(e) =>
                             setRebindForm((prev) => ({
                               ...prev,
-                              refreshToken: e.target.value.trim(),
-                            }))
-                          }
-                          style={{
-                            ...inputStyle,
-                            fontFamily: "var(--font-mono)",
-                          }}
-                        />
-                        <input
-                          placeholder="token_expires_at（可选）"
-                          value={rebindForm.tokenExpiresAt}
-                          onChange={(e) =>
-                            setRebindForm((prev) => ({
-                              ...prev,
-                              tokenExpiresAt: e.target.value.replace(/\D/g, ""),
+                              username: e.target.value,
                             }))
                           }
                           style={inputStyle}
                         />
-                      </div>
+                        <input
+                          type="password"
+                          placeholder="账号密码（留空则使用已保存密码）"
+                          value={rebindForm.password}
+                          onChange={(e) =>
+                            setRebindForm((prev) => ({
+                              ...prev,
+                              password: e.target.value,
+                            }))
+                          }
+                          style={inputStyle}
+                        />
+                      </ResponsiveFormGrid>
                       <div
                         style={{
                           fontSize: 12,
                           color: "var(--color-text-muted)",
-                          marginBottom: 10,
                         }}
                       >
-                        留空将保持原有 refresh_token
-                        不变。配置后可用于托管自动续期。
+                        登录成功后会更新 Session Token、刷新令牌和 API
+                        Token，并继续保存加密密码用于自动重登录。
+                      </div>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={handleSubmitPasswordRebind}
+                          disabled={
+                            rebindSaving || !rebindForm.username.trim()
+                          }
+                          className="btn btn-success"
+                        >
+                          {rebindSaving ? (
+                            <>
+                              <span
+                                className="spinner spinner-sm"
+                                style={{
+                                  borderTopColor: "white",
+                                  borderColor: "rgba(255,255,255,0.3)",
+                                }}
+                              />
+                              重新登录中...
+                            </>
+                          ) : (
+                            "使用账号密码重新授权"
+                          )}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <ResponsiveFormGrid>
+                        <textarea
+                          placeholder="粘贴新的 Session Token"
+                          value={rebindForm.accessToken}
+                          onChange={(e) => {
+                            setRebindForm((prev) => ({
+                              ...prev,
+                              accessToken: e.target.value.trim(),
+                            }));
+                            setRebindVerifyResult(null);
+                          }}
+                          style={{
+                            ...inputStyle,
+                            fontFamily: "var(--font-mono)",
+                            height: 74,
+                            resize: "none" as const,
+                          }}
+                        />
+                        <input
+                          placeholder="用户 ID（可选）"
+                          value={rebindForm.platformUserId}
+                          onChange={(e) => {
+                            setRebindForm((prev) => ({
+                              ...prev,
+                              platformUserId: e.target.value.replace(/\D/g, ""),
+                            }));
+                            setRebindVerifyResult(null);
+                          }}
+                          style={inputStyle}
+                        />
+                      </ResponsiveFormGrid>
+                      {isRebindSub2Api && (
+                        <>
+                          <ResponsiveFormGrid>
+                            <input
+                              placeholder="Sub2API refresh_token（可选）"
+                              value={rebindForm.refreshToken}
+                              onChange={(e) =>
+                                setRebindForm((prev) => ({
+                                  ...prev,
+                                  refreshToken: e.target.value.trim(),
+                                }))
+                              }
+                              style={{
+                                ...inputStyle,
+                                fontFamily: "var(--font-mono)",
+                              }}
+                            />
+                            <input
+                              placeholder="token_expires_at（可选）"
+                              value={rebindForm.tokenExpiresAt}
+                              onChange={(e) =>
+                                setRebindForm((prev) => ({
+                                  ...prev,
+                                  tokenExpiresAt: e.target.value.replace(/\D/g, ""),
+                                }))
+                              }
+                              style={inputStyle}
+                            />
+                          </ResponsiveFormGrid>
+                          <div
+                            style={{
+                              fontSize: 12,
+                              color: "var(--color-text-muted)",
+                            }}
+                          >
+                            留空将保持原有 refresh_token
+                            不变。配置后可用于托管自动续期。
+                          </div>
+                        </>
+                      )}
+
+                      {rebindVerifyResult &&
+                        rebindVerifyResult.success &&
+                        rebindVerifyResult.tokenType === "session" && (
+                          <div className="alert alert-success animate-scale-in">
+                            <div className="alert-title">Session Token 有效</div>
+                            <div style={{ fontSize: 12, marginTop: 4 }}>
+                              用户:{" "}
+                              {rebindVerifyResult.userInfo?.username || "未知"}
+                              {rebindVerifyResult.apiToken
+                                ? `，已识别 API Token (${String(rebindVerifyResult.apiToken).slice(0, 8)}...)`
+                                : ""}
+                            </div>
+                          </div>
+                        )}
+                      {rebindVerifyResult &&
+                        (!rebindVerifyResult.success ||
+                          rebindVerifyResult.tokenType !== "session") && (
+                          <div className="alert alert-error animate-scale-in">
+                            <div className="alert-title">
+                              {rebindVerifyResult.message ||
+                                "Token 无效或类型不正确"}
+                            </div>
+                          </div>
+                        )}
+
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={handleVerifyRebindToken}
+                          disabled={
+                            rebindVerifying || !rebindForm.accessToken.trim()
+                          }
+                          className="btn btn-ghost"
+                          style={{ border: "1px solid var(--color-border)" }}
+                        >
+                          {rebindVerifying ? (
+                            <>
+                              <span className="spinner spinner-sm" />
+                              验证中...
+                            </>
+                          ) : (
+                            "验证 Token"
+                          )}
+                        </button>
+                        <button
+                          onClick={handleSubmitRebind}
+                          disabled={
+                            rebindSaving ||
+                            !(
+                              rebindVerifyResult?.success &&
+                              rebindVerifyResult?.tokenType === "session"
+                            )
+                          }
+                          className="btn btn-success"
+                        >
+                          {rebindSaving ? (
+                            <>
+                              <span
+                                className="spinner spinner-sm"
+                                style={{
+                                  borderTopColor: "white",
+                                  borderColor: "rgba(255,255,255,0.3)",
+                                }}
+                              />
+                              绑定中...
+                            </>
+                          ) : (
+                            "确认重新绑定"
+                          )}
+                        </button>
                       </div>
                     </>
                   )}
-
-                  {rebindVerifyResult &&
-                    rebindVerifyResult.success &&
-                    rebindVerifyResult.tokenType === "session" && (
-                      <div
-                        className="alert alert-success animate-scale-in"
-                        style={{ marginBottom: 10 }}
-                      >
-                        <div className="alert-title">Session Token 有效</div>
-                        <div style={{ fontSize: 12, marginTop: 4 }}>
-                          用户:{" "}
-                          {rebindVerifyResult.userInfo?.username || "未知"}
-                          {rebindVerifyResult.apiToken
-                            ? `，已识别 API Token (${String(rebindVerifyResult.apiToken).slice(0, 8)}...)`
-                            : ""}
-                        </div>
-                      </div>
-                    )}
-                  {rebindVerifyResult &&
-                    (!rebindVerifyResult.success ||
-                      rebindVerifyResult.tokenType !== "session") && (
-                      <div
-                        className="alert alert-error animate-scale-in"
-                        style={{ marginBottom: 10 }}
-                      >
-                        <div className="alert-title">
-                          {rebindVerifyResult.message ||
-                            "Token 无效或类型不正确"}
-                        </div>
-                      </div>
-                    )}
-
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      onClick={handleVerifyRebindToken}
-                      disabled={
-                        rebindVerifying || !rebindForm.accessToken.trim()
-                      }
-                      className="btn btn-ghost"
-                      style={{ border: "1px solid var(--color-border)" }}
-                    >
-                      {rebindVerifying ? (
-                        <>
-                          <span className="spinner spinner-sm" />
-                          验证中...
-                        </>
-                      ) : (
-                        "验证 Token"
-                      )}
-                    </button>
-                    <button
-                      onClick={handleSubmitRebind}
-                      disabled={
-                        rebindSaving ||
-                        !(
-                          rebindVerifyResult?.success &&
-                          rebindVerifyResult?.tokenType === "session"
-                        )
-                      }
-                      className="btn btn-success"
-                    >
-                      {rebindSaving ? (
-                        <>
-                          <span
-                            className="spinner spinner-sm"
-                            style={{
-                              borderTopColor: "white",
-                              borderColor: "rgba(255,255,255,0.3)",
-                            }}
-                          />
-                          绑定中...
-                        </>
-                      ) : (
-                        "确认重新绑定"
-                      )}
-                    </button>
-                  </div>
                 </>
               ) : null}
             </CenteredModal>

@@ -83,6 +83,7 @@ import {
   recordSurfaceSuccess,
   selectSurfaceChannelForAttempt,
   trySurfaceOauthRefreshRecovery,
+  trySurfacePasswordReloginRecovery,
 } from './sharedSurface.js';
 import {
   buildSurfaceProxyDebugResponseHeaders,
@@ -624,6 +625,21 @@ export async function handleOpenAiResponsesSurfaceRequest(
             rawErrText: ctx.rawErrText || '',
           })) {
             const recovered = await trySurfaceOauthRefreshRecovery({
+              ctx,
+              selected,
+              siteUrl: siteApiBaseUrl,
+              buildRequest: (endpoint) => buildEndpointRequest(endpoint),
+              dispatchRequest,
+            });
+            if (recovered?.upstream?.ok) {
+              return recovered;
+            }
+          }
+          if (
+            !oauth
+            && (ctx.response.status === 401 || ctx.response.status === 403)
+          ) {
+            const recovered = await trySurfacePasswordReloginRecovery({
               ctx,
               selected,
               siteUrl: siteApiBaseUrl,

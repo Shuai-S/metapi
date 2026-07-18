@@ -12,8 +12,8 @@ import {
   resolveProxyUrlFromExtraConfig,
   resolvePlatformUserId,
 } from './accountExtraConfig.js';
-import { decryptAccountPassword } from './accountCredentialService.js';
 import { extractRuntimeHealth, setAccountRuntimeHealth } from './accountHealthService.js';
+import { autoReloginAccountWithStoredPasswordSingleflight } from './accountSessionReloginService.js';
 import { updateTodayIncomeSnapshot } from './todayIncomeRewardService.js';
 import type { BalanceInfo } from './platforms/base.js';
 import { withAccountProxyOverride, withSiteProxyRequestInit, withSiteRecordProxyRequestInit } from './siteProxy.js';
@@ -208,34 +208,6 @@ async function fetchTodayIncomeFromLogs(params: {
   return Math.round(totalIncome * 1_000_000) / 1_000_000;
 }
 
-async function tryAutoRelogin(account: any, site: any): Promise<string | null> {
-  const adapter = getAdapter(site.platform);
-  if (!adapter) return null;
-
-  const relogin = getAutoReloginConfig(account.extraConfig);
-  if (!relogin) return null;
-
-  const password = decryptAccountPassword(relogin.passwordCipher);
-  if (!password) return null;
-
-  const loginResult = await withAccountProxyOverride(
-    resolveProxyUrlFromExtraConfig(account.extraConfig),
-    () => adapter.login(site.url, relogin.username, password),
-  );
-  if (!loginResult.success || !loginResult.accessToken) return null;
-
-  await db.update(schema.accounts)
-    .set({
-      accessToken: loginResult.accessToken,
-      status: account.status === 'expired' ? 'active' : account.status,
-      updatedAt: new Date().toISOString(),
-    })
-    .where(eq(schema.accounts.id, account.id))
-    .run();
-
-  return loginResult.accessToken;
-}
-
 export async function refreshBalance(accountId: number) {
   const rows = await db
     .select()
@@ -314,9 +286,17 @@ export async function refreshBalance(accountId: number) {
         username: account.username,
         siteName: site.name,
         detail: message,
+        attemptPasswordRelogin: false,
       });
     }
     throw new Error(message);
+  };
+  const tryPasswordRelogin = async () => {
+    const relogin = await autoReloginAccountWithStoredPasswordSingleflight(account.id);
+    if (!relogin.success) return false;
+    activeAccessToken = relogin.accessToken;
+    activeExtraConfig = relogin.extraConfig;
+    return true;
   };
 
   try {
@@ -340,12 +320,18 @@ export async function refreshBalance(accountId: number) {
         activeExtraConfig = refreshed.extraConfig;
         balanceInfo = await readBalance(activeAccessToken);
       } catch (retryErr: any) {
-        await handleBalanceError(retryErr);
+        if (await tryPasswordRelogin()) {
+          try {
+            balanceInfo = await readBalance(activeAccessToken);
+          } catch (passwordRetryErr: any) {
+            await handleBalanceError(passwordRetryErr);
+          }
+        } else {
+          await handleBalanceError(retryErr);
+        }
       }
     } else if (shouldAttemptAutoRelogin(message)) {
-      const refreshedAccessToken = await tryAutoRelogin(account, site);
-      if (refreshedAccessToken) {
-        activeAccessToken = refreshedAccessToken;
+      if (await tryPasswordRelogin()) {
         try {
           balanceInfo = await readBalance(activeAccessToken);
         } catch (retryErr: any) {
@@ -424,11 +410,10 @@ export async function refreshBalance(accountId: number) {
 }
 
 export async function refreshAllBalances() {
-  const rows = await db
-    .select()
-    .from(schema.accounts)
-    .where(eq(schema.accounts.status, 'active'))
-    .all();
+  const rows = (await db.select().from(schema.accounts).all()).filter((account) => (
+    account.status === 'active'
+    || (account.status === 'expired' && !!getAutoReloginConfig(account.extraConfig))
+  ));
 
   const results: Array<{ accountId: number; balance: number | null }> = [];
 
