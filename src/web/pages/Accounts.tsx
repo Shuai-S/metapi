@@ -180,6 +180,11 @@ function formatGroupRateMultiplier(value: number | null): string {
   return `${value.toFixed(2).replace(/\.?0+$/, "")}x`;
 }
 
+function isLowBalance(balance: unknown): boolean {
+  const numericBalance = Number(balance);
+  return !Number.isFinite(numericBalance) || numericBalance < 1;
+}
+
 function compareAccountGroupRows(left: AccountGroupRow, right: AccountGroupRow) {
   return (
     left.siteName.localeCompare(right.siteName, "zh-Hans") ||
@@ -3726,7 +3731,9 @@ export default function Accounts() {
                               <div
                                 style={{
                                   fontWeight: 600,
-                                  color: "var(--color-text-primary)",
+                                  color: isLowBalance(a.balance)
+                                    ? "var(--color-danger)"
+                                    : "var(--color-text-primary)",
                                 }}
                               >
                                 ${(a.balance || 0).toFixed(2)}
@@ -4097,7 +4104,9 @@ export default function Accounts() {
                             <div
                               style={{
                                 fontWeight: 600,
-                                color: "var(--color-text-primary)",
+                                color: isLowBalance(a.balance)
+                                  ? "var(--color-danger)"
+                                  : "var(--color-text-primary)",
                               }}
                             >
                               ${(a.balance || 0).toFixed(2)}

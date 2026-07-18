@@ -42,6 +42,73 @@ describe('Accounts segmented connections view', () => {
     vi.clearAllMocks();
   });
 
+  it('highlights balances below one in the danger color', async () => {
+    apiMock.getAccounts.mockResolvedValue([
+      {
+        id: 1,
+        username: 'low-balance-user',
+        balance: 0.42,
+        balanceUsed: 0,
+        todayReward: 0,
+        todaySpend: 0,
+        accessToken: 'low-balance-token',
+        status: 'active',
+        credentialMode: 'session',
+        capabilities: { canCheckin: true, canRefreshBalance: true, proxyOnly: false },
+        site: { id: 10, name: 'Balance Site', platform: 'new-api', status: 'active', url: 'https://balance.example.com' },
+      },
+      {
+        id: 2,
+        username: 'healthy-balance-user',
+        balance: 1.42,
+        balanceUsed: 0,
+        todayReward: 0,
+        todaySpend: 0,
+        accessToken: 'healthy-balance-token',
+        status: 'active',
+        credentialMode: 'session',
+        capabilities: { canCheckin: true, canRefreshBalance: true, proxyOnly: false },
+        site: { id: 10, name: 'Balance Site', platform: 'new-api', status: 'active', url: 'https://balance.example.com' },
+      },
+    ]);
+    apiMock.getSites.mockResolvedValue([
+      { id: 10, name: 'Balance Site', platform: 'new-api', status: 'active' },
+    ]);
+    apiMock.getAccountTokens.mockResolvedValue([]);
+
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/accounts']}>
+            <ToastProvider>
+              <Accounts />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      const lowBalance = root.root.findAll(
+        (node) => node.type === 'div'
+          && node.props.style?.fontWeight === 600
+          && collectText(node) === '$0.42',
+      );
+      const healthyBalance = root.root.findAll(
+        (node) => node.type === 'div'
+          && node.props.style?.fontWeight === 600
+          && collectText(node) === '$1.42',
+      );
+
+      expect(lowBalance).toHaveLength(1);
+      expect(lowBalance[0]?.props.style.color).toBe('var(--color-danger)');
+      expect(healthyBalance).toHaveLength(1);
+      expect(healthyBalance[0]?.props.style.color).toBe('var(--color-text-primary)');
+    } finally {
+      root?.unmount();
+    }
+  });
+
   it('shows only apikey connections in the apikey segment and labels unnamed ones as API Token 连接', async () => {
     apiMock.getAccounts.mockResolvedValue([
       {
