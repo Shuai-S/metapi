@@ -77,10 +77,12 @@ describe('ChatGPT Session converter', () => {
           concurrency: 5,
           rateMultiplier: 0,
           priority: 10,
+          importGroup: '  codex-pool  ',
         },
       },
     );
     expect((result.output as any).accounts[0]).toMatchObject({
+      group: 'codex-pool',
       concurrency: 5,
       priority: 10,
       rate_multiplier: 0,
@@ -96,6 +98,36 @@ describe('ChatGPT Session converter', () => {
       accountOutputPriority: 10,
       sub2apiPriority: 10001,
     });
+  });
+
+  it('applies the import group to every sub2api account and omits blank groups', () => {
+    const second = {
+      ...session,
+      user: { id: 'user-2', email: 'two@example.com' },
+      account: { id: 'account-2', planType: 'plus' },
+    };
+    const grouped = convertChatGptSessionSources(
+      [{ text: JSON.stringify([session, second]), sourceName: 'sessions.json' }],
+      {
+        format: 'sub2api',
+        now,
+        sub2apiAccountSettings: { importGroup: 'batch-a' },
+      },
+    );
+    expect((grouped.output as any).accounts.map((account: any) => account.group)).toEqual([
+      'batch-a',
+      'batch-a',
+    ]);
+
+    const ungrouped = convertChatGptSessionSources(
+      [{ text: JSON.stringify(session), sourceName: 'session.json' }],
+      {
+        format: 'sub2api',
+        now,
+        sub2apiAccountSettings: { importGroup: '   ' },
+      },
+    );
+    expect((ungrouped.output as any).accounts[0]).not.toHaveProperty('group');
   });
 
   it('builds each supported output contract from the same normalized session', () => {

@@ -52,6 +52,7 @@ export type Sub2ApiAccountOutputSettings = {
   concurrency?: number;
   priority?: number;
   rateMultiplier?: number;
+  importGroup?: string;
 };
 
 export type SessionConversionResult = {
@@ -536,6 +537,7 @@ function convertSession(
     ? undefined
     : normalizeNonNegativeNumber(sub2apiAccountSettings.rateMultiplier, 1);
   const modelMapping = buildModelMapping(sub2apiAccountSettings?.models);
+  const importGroup = firstNonEmpty(sub2apiAccountSettings?.importGroup);
 
   const cpa = asOutputRecord(stripUnavailable({
     type: 'codex',
@@ -570,6 +572,7 @@ function convertSession(
     name,
     platform: 'openai',
     type: 'oauth',
+    group: importGroup,
     concurrency: accountOutputConcurrency,
     priority: accountOutputPriority,
     rate_multiplier: accountRateMultiplier,

@@ -4,6 +4,8 @@ export const THEME_MODE_STORAGE_KEY = 'theme_mode';
 export const LEGACY_THEME_STORAGE_KEY = 'theme';
 export const USER_PROFILE_STORAGE_KEY = 'user_profile';
 export const FIRST_USE_DOC_REMINDER_KEY = 'metapi_first_use_docs_reminder_seen_v1';
+export const SESSION_CONVERTER_SUB2API_IMPORT_GROUP_STORAGE_KEY =
+  'metapi:session-converter:sub2api-import-group:v1';
 
 type StorageLike = {
   getItem?: (key: string) => string | null;
@@ -25,4 +27,5 @@ export function clearAppInstallationState(storage?: StorageLike | null): void {
   target.removeItem(LEGACY_THEME_STORAGE_KEY);
   target.removeItem(USER_PROFILE_STORAGE_KEY);
   target.removeItem(FIRST_USE_DOC_REMINDER_KEY);
+  target.removeItem(SESSION_CONVERTER_SUB2API_IMPORT_GROUP_STORAGE_KEY);
 }

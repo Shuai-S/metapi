@@ -1,5 +1,6 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { tr } from '../i18n.js';
+import { SESSION_CONVERTER_SUB2API_IMPORT_GROUP_STORAGE_KEY } from '../appLocalState.js';
 import {
   convertChatGptSessionSources,
   SESSION_OUTPUT_FORMATS,
@@ -31,6 +32,29 @@ function parseNonNegativeSetting(value: string, fallback: number, integer = fals
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric < 0) return fallback;
   return integer ? Math.trunc(numeric) : numeric;
+}
+
+function readStoredImportGroup(): string {
+  if (typeof localStorage === 'undefined') return '';
+  try {
+    return localStorage.getItem(SESSION_CONVERTER_SUB2API_IMPORT_GROUP_STORAGE_KEY)?.trim() || '';
+  } catch {
+    return '';
+  }
+}
+
+function persistImportGroup(value: string): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const normalized = value.trim();
+    if (normalized) {
+      localStorage.setItem(SESSION_CONVERTER_SUB2API_IMPORT_GROUP_STORAGE_KEY, normalized);
+    } else {
+      localStorage.removeItem(SESSION_CONVERTER_SUB2API_IMPORT_GROUP_STORAGE_KEY);
+    }
+  } catch {
+    // Local parsing and conversion remain available when browser storage is blocked.
+  }
 }
 
 function triggerDownload(blob: Blob, fileName: string) {
@@ -72,6 +96,11 @@ export default function Features() {
   const [accountConcurrency, setAccountConcurrency] = useState('10');
   const [accountRateMultiplier, setAccountRateMultiplier] = useState('0');
   const [accountPriority, setAccountPriority] = useState('1');
+  const [accountImportGroup, setAccountImportGroup] = useState(readStoredImportGroup);
+
+  useEffect(() => {
+    persistImportGroup(accountImportGroup);
+  }, [accountImportGroup]);
 
   const hasInput = sources.some((source) => source.text.trim() !== '');
   const result = useMemo(() => {
@@ -84,10 +113,12 @@ export default function Features() {
         concurrency: parseNonNegativeSetting(accountConcurrency, 10, true),
         rateMultiplier: parseNonNegativeSetting(accountRateMultiplier, 0),
         priority: parseNonNegativeSetting(accountPriority, 1, true),
+        importGroup: accountImportGroup,
       },
     });
   }, [
     accountConcurrency,
+    accountImportGroup,
     accountModels,
     accountPriority,
     accountRateMultiplier,
@@ -168,7 +199,7 @@ export default function Features() {
       <div className="page-header feature-page-header">
         <div>
           <h2 className="page-title">{tr('Session 转换器')}</h2>
-          <p className="feature-page-subtitle">{tr('浏览器本地解析，不上传 Token，不写入存储')}</p>
+          <p className="feature-page-subtitle">{tr('浏览器本地解析，Token 不上传、不写入存储；仅保存导入分组设置')}</p>
         </div>
       </div>
 
@@ -187,6 +218,16 @@ export default function Features() {
           <div className="session-account-settings" aria-label={tr('Sub2API 输出账号设置')}>
             <div className="session-account-settings-top">
               <strong>{tr('Sub2API 输出账号设置')}</strong>
+              <label className="session-account-group-field">
+                <span>{tr('导入分组')}</span>
+                <input
+                  type="text"
+                  value={accountImportGroup}
+                  aria-label={tr('导入分组')}
+                  placeholder={tr('输入分组配置')}
+                  onChange={(event) => setAccountImportGroup(event.target.value)}
+                />
+              </label>
               <label className="session-account-number-field">
                 <span>{tr('并发')}</span>
                 <input
