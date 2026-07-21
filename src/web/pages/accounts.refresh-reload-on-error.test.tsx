@@ -3,6 +3,7 @@ import { act, create, type ReactTestInstance } from 'react-test-renderer';
 import { MemoryRouter } from 'react-router-dom';
 import { ToastProvider } from '../components/Toast.js';
 import Accounts from './Accounts.js';
+import { formatDateTimeMinuteLocal } from './helpers/checkinLogTime.js';
 import { installAccountsSnapshotCompat } from './testApiCompat.js';
 
 const { apiMock } = vi.hoisted(() => ({
@@ -41,6 +42,54 @@ describe('Accounts refresh action', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('shows the persisted balance refresh time next to the success reason', async () => {
+    const lastBalanceRefresh = '2026-07-21T08:09:00.000Z';
+    apiMock.getAccounts.mockResolvedValueOnce([
+      {
+        id: 1,
+        username: 'tester',
+        balance: 100,
+        balanceUsed: 0,
+        todayReward: 0,
+        todaySpend: 0,
+        accessToken: 'session-token',
+        status: 'active',
+        checkinEnabled: true,
+        lastBalanceRefresh,
+        site: { id: 10, name: 'Demo Site', status: 'active', url: 'https://example.com' },
+        runtimeHealth: {
+          state: 'healthy',
+          reason: '余额刷新成功',
+          source: 'balance',
+          checkedAt: '2026-07-21T09:10:00.000Z',
+        },
+      },
+    ]);
+    apiMock.getSites.mockResolvedValue([
+      { id: 10, name: 'Demo Site', platform: 'new-api', status: 'active' },
+    ]);
+
+    let root!: WebTestRenderer;
+    try {
+      await act(async () => {
+        root = create(
+          <MemoryRouter initialEntries={['/accounts']}>
+            <ToastProvider>
+              <Accounts />
+            </ToastProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flushMicrotasks();
+
+      expect(collectText(root.root)).toContain(
+        `余额刷新成功 · ${formatDateTimeMinuteLocal(lastBalanceRefresh)}`,
+      );
+    } finally {
+      root?.unmount();
+    }
   });
 
   it('reloads account list even when refresh balance fails', async () => {

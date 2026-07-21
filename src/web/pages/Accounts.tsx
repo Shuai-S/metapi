@@ -38,6 +38,7 @@ import { shouldIgnoreRowSelectionClick } from "./helpers/rowSelection.js";
 import { SITE_DOCS_URL } from "../docsLink.js";
 import { getSiteInitializationPreset } from "../../shared/siteInitializationPresets.js";
 import { parseBatchApiKeys } from "../../shared/apiKeyBatch.js";
+import { formatDateTimeMinuteLocal } from "./helpers/checkinLogTime.js";
 
 type ConnectionsSegment = "session" | "apikey" | "tokens" | "groups";
 type EditableConnectionType = "session" | "apikey" | "password";
@@ -181,6 +182,20 @@ function normalizeGroupOption(raw: unknown): AccountGroupOption | null {
     name,
     ...(Number.isFinite(rateMultiplier) ? { rateMultiplier } : {}),
   };
+}
+
+function formatRuntimeHealthReason(account: any, reason: string): string {
+  if (account?.runtimeHealth?.source !== "balance") return reason;
+
+  const refreshedAt =
+    (typeof account?.lastBalanceRefresh === "string" &&
+      account.lastBalanceRefresh.trim()) ||
+    (typeof account?.runtimeHealth?.checkedAt === "string" &&
+      account.runtimeHealth.checkedAt.trim()) ||
+    "";
+  if (!refreshedAt) return reason;
+
+  return `${reason} · ${formatDateTimeMinuteLocal(refreshedAt)}`;
 }
 
 function formatGroupRateMultiplier(value: number | null): string {
@@ -1116,7 +1131,11 @@ export default function Accounts() {
         : state === "unhealthy"
           ? "最近健康检查失败"
           : "尚未获取运行健康信息");
-    return { state, reason, ...cfg };
+    return {
+      state,
+      reason: formatRuntimeHealthReason(account, reason),
+      ...cfg,
+    };
   };
 
   const resolveAccountCapabilities = (account: any) => {
