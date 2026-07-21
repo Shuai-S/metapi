@@ -3,6 +3,7 @@ import {
   formatCheckinLogTime,
   formatDateLocal,
   formatDateTimeMinuteLocal,
+  formatMonthDayTimeLocal,
 } from './checkinLogTime.js';
 
 describe('formatCheckinLogTime', () => {
@@ -18,6 +19,10 @@ describe('formatCheckinLogTime', () => {
   it('formats local date with minute precision helpers', () => {
     expect(formatDateLocal('2026-02-25 03:51:58', 'en-US', 'UTC')).toBe('02/25/2026');
     expect(formatDateTimeMinuteLocal('2026-02-25 03:51:58', 'en-US', 'UTC')).toBe('02/25/2026, 03:51');
+  });
+
+  it('formats compact month-day time with seconds and no year', () => {
+    expect(formatMonthDayTimeLocal('2026-02-25 03:51:58', 'zh-CN', 'UTC')).toBe('02/25 03:51:58');
   });
 
   it('supports postgres-style timezone offset without colon', () => {

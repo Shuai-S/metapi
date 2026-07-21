@@ -3,7 +3,7 @@ import { act, create, type ReactTestInstance } from 'react-test-renderer';
 import { MemoryRouter } from 'react-router-dom';
 import { ToastProvider } from '../components/Toast.js';
 import Accounts from './Accounts.js';
-import { formatDateTimeMinuteLocal } from './helpers/checkinLogTime.js';
+import { formatMonthDayTimeLocal } from './helpers/checkinLogTime.js';
 import { installAccountsSnapshotCompat } from './testApiCompat.js';
 
 const { apiMock } = vi.hoisted(() => ({
@@ -44,8 +44,8 @@ describe('Accounts refresh action', () => {
     vi.clearAllMocks();
   });
 
-  it('shows the persisted balance refresh time next to the success reason', async () => {
-    const lastBalanceRefresh = '2026-07-21T08:09:00.000Z';
+  it('shows the persisted balance time even when model discovery owns health', async () => {
+    const lastBalanceRefresh = '2026-07-21T08:09:37.000Z';
     apiMock.getAccounts.mockResolvedValueOnce([
       {
         id: 1,
@@ -61,8 +61,8 @@ describe('Accounts refresh action', () => {
         site: { id: 10, name: 'Demo Site', status: 'active', url: 'https://example.com' },
         runtimeHealth: {
           state: 'healthy',
-          reason: '余额刷新成功',
-          source: 'balance',
+          reason: '模型探测成功',
+          source: 'model-discovery',
           checkedAt: '2026-07-21T09:10:00.000Z',
         },
       },
@@ -85,7 +85,7 @@ describe('Accounts refresh action', () => {
       await flushMicrotasks();
 
       expect(collectText(root.root)).toContain(
-        `余额刷新成功 · ${formatDateTimeMinuteLocal(lastBalanceRefresh)}`,
+        `模型探测成功 · 余额 ${formatMonthDayTimeLocal(lastBalanceRefresh)}`,
       );
     } finally {
       root?.unmount();

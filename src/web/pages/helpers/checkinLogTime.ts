@@ -85,6 +85,21 @@ export function formatDateTimeMinuteLocal(
   }, locale, timeZone);
 }
 
+export function formatMonthDayTimeLocal(
+  value: string | null | undefined,
+  locale = 'zh-CN',
+  timeZone?: string,
+): string {
+  return formatWithParts(value, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }, locale, timeZone);
+}
+
 export function formatDateLocal(
   value: string | null | undefined,
   locale = 'zh-CN',

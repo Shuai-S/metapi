@@ -38,7 +38,7 @@ import { shouldIgnoreRowSelectionClick } from "./helpers/rowSelection.js";
 import { SITE_DOCS_URL } from "../docsLink.js";
 import { getSiteInitializationPreset } from "../../shared/siteInitializationPresets.js";
 import { parseBatchApiKeys } from "../../shared/apiKeyBatch.js";
-import { formatDateTimeMinuteLocal } from "./helpers/checkinLogTime.js";
+import { formatMonthDayTimeLocal } from "./helpers/checkinLogTime.js";
 
 type ConnectionsSegment = "session" | "apikey" | "tokens" | "groups";
 type EditableConnectionType = "session" | "apikey" | "password";
@@ -185,17 +185,19 @@ function normalizeGroupOption(raw: unknown): AccountGroupOption | null {
 }
 
 function formatRuntimeHealthReason(account: any, reason: string): string {
-  if (account?.runtimeHealth?.source !== "balance") return reason;
-
   const refreshedAt =
     (typeof account?.lastBalanceRefresh === "string" &&
       account.lastBalanceRefresh.trim()) ||
-    (typeof account?.runtimeHealth?.checkedAt === "string" &&
+    (account?.runtimeHealth?.source === "balance" &&
+      typeof account?.runtimeHealth?.checkedAt === "string" &&
       account.runtimeHealth.checkedAt.trim()) ||
     "";
-  if (!refreshedAt) return reason;
+  if (!refreshedAt) return `${reason} · 余额未刷新`;
 
-  return `${reason} · ${formatDateTimeMinuteLocal(refreshedAt)}`;
+  const refreshedTime = formatMonthDayTimeLocal(refreshedAt);
+  return account?.runtimeHealth?.source === "balance" && reason === "余额刷新成功"
+    ? `${reason} · ${refreshedTime}`
+    : `${reason} · 余额 ${refreshedTime}`;
 }
 
 function formatGroupRateMultiplier(value: number | null): string {
@@ -1109,10 +1111,12 @@ export default function Accounts() {
 
   const resolveRuntimeHealth = (account: any) => {
     if (account.status === "expired") {
+      const reason =
+        account.runtimeHealth?.reason || "连接凭证已过期，请更新凭证";
       return {
         ...runtimeHealthMap.unhealthy,
         label: "已过期",
-        reason: account.runtimeHealth?.reason || "连接凭证已过期，请更新凭证",
+        reason: formatRuntimeHealthReason(account, reason),
       };
     }
     const capabilities = resolveAccountCapabilities(account);
@@ -3880,9 +3884,8 @@ export default function Accounts() {
                                   fontSize: 11,
                                   color: "var(--color-text-muted)",
                                   maxWidth: 240,
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
+                                  lineHeight: 1.4,
+                                  whiteSpace: "normal",
                                 }}
                                 data-tooltip={health.reason}
                               >
@@ -4255,9 +4258,8 @@ export default function Accounts() {
                                       fontSize: 11,
                                       color: "var(--color-text-muted)",
                                       maxWidth: 200,
-                                      overflow: "hidden",
-                                      textOverflow: "ellipsis",
-                                      whiteSpace: "nowrap",
+                                      lineHeight: 1.4,
+                                      whiteSpace: "normal",
                                     }}
                                     data-tooltip={health.reason}
                                   >
