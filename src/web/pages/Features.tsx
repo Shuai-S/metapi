@@ -11,6 +11,7 @@ import {
   type Sub2ApiCodexFingerprintMode,
 } from './helpers/chatGptSessionConverter.js';
 import { buildSessionDownload } from './helpers/sessionDownload.js';
+import Sub2ApiPoolPanel from './features/Sub2ApiPoolPanel.js';
 
 const EXAMPLE_SESSION = JSON.stringify({
   user: { id: 'user-example', email: 'mark@example.com' },
@@ -140,6 +141,10 @@ export default function Features() {
     hasInput,
     sources,
   ]);
+  const sub2ApiPoolAccounts = useMemo(
+    () => result?.converted.map((item) => item.sub2apiAccount) || [],
+    [result],
+  );
 
   const commitModelDraft = () => {
     const additions = modelDraft
@@ -212,7 +217,7 @@ export default function Features() {
       <div className="page-header feature-page-header">
         <div>
           <h2 className="page-title">{tr('Session 转换器')}</h2>
-          <p className="feature-page-subtitle">{tr('浏览器本地解析，Token 不上传、不写入存储；仅保存导入分组设置')}</p>
+          <p className="feature-page-subtitle">{tr('默认在浏览器本地解析；仅在手动推送时将账号发送到已配置的 Sub2API')}</p>
         </div>
       </div>
 
@@ -360,6 +365,8 @@ export default function Features() {
             <span>{tr('导入后立即触发刷新 Token')}</span>
           </label>
         </div>
+
+        <Sub2ApiPoolPanel accounts={sub2ApiPoolAccounts} />
 
         <div className="session-converter-grid">
           <section className="session-pane" aria-labelledby="session-input-title">

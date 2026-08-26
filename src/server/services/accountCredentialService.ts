@@ -9,11 +9,11 @@ function buildKey(): Buffer {
   return createHash('sha256').update(secret).digest();
 }
 
-export function encryptAccountPassword(password: string): string {
+export function encryptSecret(plainText: string): string {
   const key = buildKey();
   const iv = randomBytes(12);
   const cipher = createCipheriv(ALGORITHM, key, iv);
-  const encrypted = Buffer.concat([cipher.update(password, 'utf8'), cipher.final()]);
+  const encrypted = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
   return [
     VERSION,
@@ -23,7 +23,7 @@ export function encryptAccountPassword(password: string): string {
   ].join(':');
 }
 
-export function decryptAccountPassword(cipherText: string): string | null {
+export function decryptSecret(cipherText: string): string | null {
   const parts = (cipherText || '').split(':');
   if (parts.length !== 4 || parts[0] !== VERSION) return null;
 
@@ -41,4 +41,12 @@ export function decryptAccountPassword(cipherText: string): string | null {
   } catch {
     return null;
   }
+}
+
+export function encryptAccountPassword(password: string): string {
+  return encryptSecret(password);
+}
+
+export function decryptAccountPassword(cipherText: string): string | null {
+  return decryptSecret(cipherText);
 }

@@ -767,6 +767,35 @@ export type DownstreamApiKeyTrendResponse = {
   buckets: DownstreamApiKeyTrendBucket[];
 };
 
+export type Sub2ApiPoolConfig = {
+  baseUrl: string;
+  adminApiKeyConfigured: boolean;
+  adminApiKeyMasked: string;
+  groupIds: number[];
+  maxParallel: number;
+};
+
+export type Sub2ApiPoolGroup = {
+  id: number;
+  name: string;
+  platform?: string;
+  status?: string;
+};
+
+export type Sub2ApiPoolPushResult = {
+  total: number;
+  created: number;
+  skipped: number;
+  failed: number;
+  items: Array<{
+    index: number;
+    name: string;
+    status: "created" | "skipped" | "failed";
+    accountId?: number | string;
+    message: string;
+  }>;
+};
+
 export const api = {
   // Sites
   getSites: () => request("/api/sites"),
@@ -1291,6 +1320,32 @@ export const api = {
     request("/api/settings/auth/change", {
       method: "POST",
       body: JSON.stringify({ oldToken, newToken }),
+    }),
+  getSub2ApiPoolConfig: (): Promise<Sub2ApiPoolConfig> =>
+    request("/api/sub2api-pool/config"),
+  updateSub2ApiPoolConfig: (data: {
+    baseUrl?: string;
+    adminApiKey?: string;
+    clearAdminApiKey?: boolean;
+    groupIds?: number[];
+    maxParallel?: number;
+  }): Promise<Sub2ApiPoolConfig> =>
+    request("/api/sub2api-pool/config", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  testSub2ApiPoolConnection: (): Promise<{
+    success: true;
+    message: string;
+    groupCount: number;
+  }> => request("/api/sub2api-pool/test", { method: "POST" }),
+  getSub2ApiPoolGroups: (): Promise<{ groups: Sub2ApiPoolGroup[] }> =>
+    request("/api/sub2api-pool/groups"),
+  pushSub2ApiPoolAccounts: (accounts: Record<string, unknown>[]): Promise<Sub2ApiPoolPushResult> =>
+    request("/api/sub2api-pool/push", {
+      method: "POST",
+      body: JSON.stringify({ accounts }),
+      timeoutMs: 180_000,
     }),
   getRuntimeSettings: () => request("/api/settings/runtime"),
   getBrandList: () => request("/api/settings/brand-list"),

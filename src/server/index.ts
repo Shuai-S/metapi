@@ -24,6 +24,7 @@ import { oauthRoutes } from './routes/api/oauth.js';
 import { siteAnnouncementsRoutes } from './routes/api/siteAnnouncements.js';
 import { customerBalanceRoutes } from './routes/api/customerBalances.js';
 import { updateCenterRoutes } from './routes/api/updateCenter.js';
+import { sub2ApiPoolRoutes } from './routes/api/sub2apiPool.js';
 import { proxyRoutes } from './routes/proxy/router.js';
 import { startScheduler } from './services/checkinScheduler.js';
 import * as routeRefreshWorkflow from './services/routeRefreshWorkflow.js';
@@ -231,6 +232,7 @@ await app.register(testRoutes);
 await app.register(monitorRoutes);
 await app.register(downstreamApiKeysRoutes);
 await app.register(oauthRoutes);
+await app.register(sub2ApiPoolRoutes);
 
 // Register OpenAI-compatible proxy routes
 await app.register(proxyRoutes);

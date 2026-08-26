@@ -605,6 +605,8 @@ function convertSession(
     notes: normalizeDateOnly(now),
     credentials: {
       access_token: accessToken,
+      account_id: accountId,
+      chatgpt_account_id: accountId,
       chatgpt_user_id: userId,
       email,
       expires_at: effectiveExpiresAt,
