@@ -5,8 +5,10 @@ import {
   convertChatGptSessionSources,
   SESSION_OUTPUT_FORMATS,
   SESSION_OUTPUT_LABELS,
+  SUB2API_CODEX_FINGERPRINT_MODES,
   type SessionOutputFormat,
   type SessionSourceDocument,
+  type Sub2ApiCodexFingerprintMode,
 } from './helpers/chatGptSessionConverter.js';
 import { buildSessionDownload } from './helpers/sessionDownload.js';
 
@@ -27,6 +29,13 @@ const DEFAULT_SUB2API_MODELS = [
   'gpt-5.6-sol',
   'gpt-5.6-terra',
 ];
+
+const SUB2API_CODEX_FINGERPRINT_LABELS: Record<Sub2ApiCodexFingerprintMode, string> = {
+  off: '关闭（透传，默认）',
+  device: '仅设备',
+  session: '设备+会话',
+  full: '完全收敛',
+};
 
 function parseNonNegativeSetting(value: string, fallback: number, integer = false): number {
   const numeric = Number(value);
@@ -97,6 +106,8 @@ export default function Features() {
   const [accountRateMultiplier, setAccountRateMultiplier] = useState('0');
   const [accountPriority, setAccountPriority] = useState('1');
   const [accountImportGroup, setAccountImportGroup] = useState(readStoredImportGroup);
+  const [codexFingerprintMode, setCodexFingerprintMode] =
+    useState<Sub2ApiCodexFingerprintMode>('session');
 
   useEffect(() => {
     persistImportGroup(accountImportGroup);
@@ -114,6 +125,7 @@ export default function Features() {
         rateMultiplier: parseNonNegativeSetting(accountRateMultiplier, 0),
         priority: parseNonNegativeSetting(accountPriority, 1, true),
         importGroup: accountImportGroup,
+        codexFingerprintMode,
       },
     });
   }, [
@@ -122,6 +134,7 @@ export default function Features() {
     accountModels,
     accountPriority,
     accountRateMultiplier,
+    codexFingerprintMode,
     forceRefreshAfterImport,
     format,
     hasInput,
@@ -203,7 +216,7 @@ export default function Features() {
         </div>
       </div>
 
-      <section className="feature-tool">
+      <section className="feature-tool session-tool-layout">
         <div className="feature-tool-heading">
           <div className="feature-tool-heading-copy">
             <div className="feature-tool-icon" aria-hidden="true">
@@ -293,6 +306,31 @@ export default function Features() {
             </div>
           </div>
         </div>
+
+        <aside
+          className="session-fingerprint-setting"
+          aria-label={tr('Codex 指纹收敛')}
+        >
+          <label htmlFor="session-codex-fingerprint-mode">
+            {tr('Codex 指纹收敛')}
+          </label>
+          <select
+            id="session-codex-fingerprint-mode"
+            value={codexFingerprintMode}
+            aria-label={tr('Codex 指纹收敛')}
+            title={tr('多人共享同一 OAuth 账号时，收敛设备和会话标识；部分账号开启后可能出现额度缩水。')}
+            onChange={(event) => {
+              setCodexFingerprintMode(event.target.value as Sub2ApiCodexFingerprintMode);
+            }}
+          >
+            {SUB2API_CODEX_FINGERPRINT_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {tr(SUB2API_CODEX_FINGERPRINT_LABELS[mode])}
+              </option>
+            ))}
+          </select>
+          <p>{tr('部分账号开启收敛后可能出现额度缩水')}</p>
+        </aside>
 
         <div className="session-format-bar" aria-label={tr('输出格式')}>
           <span className="session-format-label">{tr('输出格式')}</span>

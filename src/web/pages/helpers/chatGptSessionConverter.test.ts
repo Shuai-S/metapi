@@ -3,6 +3,8 @@ import {
   convertChatGptSessionSources,
   parseJwtPayload,
   SESSION_OUTPUT_FORMATS,
+  SUB2API_CODEX_FINGERPRINT_MODES,
+  type Sub2ApiCodexFingerprintMode,
   type SessionOutputFormat,
 } from './chatGptSessionConverter.js';
 
@@ -98,6 +100,77 @@ describe('ChatGPT Session converter', () => {
       accountOutputPriority: 10,
       sub2apiPriority: 10001,
     });
+  });
+
+  it.each([
+    ['off', undefined],
+    ['device', 'device'],
+    ['session', 'session'],
+    ['full', 'full'],
+  ] satisfies Array<[Sub2ApiCodexFingerprintMode, string | undefined]>)(
+    'maps the %s Codex fingerprint mode to sub2api extra',
+    (codexFingerprintMode, expected) => {
+      const result = convertChatGptSessionSources(
+        [{ text: JSON.stringify(session), sourceName: 'session.json' }],
+        {
+          format: 'sub2api',
+          now,
+          sub2apiAccountSettings: { codexFingerprintMode },
+        },
+      );
+      const account = (result.output as any).accounts[0];
+
+      expect(SUB2API_CODEX_FINGERPRINT_MODES).toContain(codexFingerprintMode);
+      if (expected === undefined) {
+        expect(account.extra).not.toHaveProperty('codex_fingerprint_mode');
+      } else {
+        expect(account.extra.codex_fingerprint_mode).toBe(expected);
+      }
+      expect(account.extra).not.toHaveProperty('codex_fingerprint_seed');
+    },
+  );
+
+  it('omits missing and invalid Codex fingerprint modes at runtime', () => {
+    const missing = convertChatGptSessionSources(
+      [{ text: JSON.stringify(session), sourceName: 'session.json' }],
+      { format: 'sub2api', now },
+    );
+    const invalid = convertChatGptSessionSources(
+      [{ text: JSON.stringify(session), sourceName: 'session.json' }],
+      {
+        format: 'sub2api',
+        now,
+        sub2apiAccountSettings: {
+          codexFingerprintMode: 'unexpected' as Sub2ApiCodexFingerprintMode,
+        },
+      },
+    );
+
+    expect((missing.output as any).accounts[0].extra)
+      .not.toHaveProperty('codex_fingerprint_mode');
+    expect((invalid.output as any).accounts[0].extra)
+      .not.toHaveProperty('codex_fingerprint_mode');
+  });
+
+  it('applies the selected Codex fingerprint mode to every sub2api account', () => {
+    const second = {
+      ...session,
+      user: { id: 'user-2', email: 'two@example.com' },
+      account: { id: 'account-2', planType: 'plus' },
+    };
+    const result = convertChatGptSessionSources(
+      [{ text: JSON.stringify([session, second]), sourceName: 'sessions.json' }],
+      {
+        format: 'sub2api',
+        now,
+        sub2apiAccountSettings: { codexFingerprintMode: 'session' },
+      },
+    );
+
+    expect((result.output as any).accounts.map(
+      (account: any) => account.extra.codex_fingerprint_mode,
+    )).toEqual(['session', 'session']);
+    expect(JSON.stringify(result.output)).not.toContain('codex_fingerprint_seed');
   });
 
   it('applies the import group to every sub2api account and omits blank groups', () => {

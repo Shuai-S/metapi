@@ -772,6 +772,15 @@ body {
 .feature-tool-heading p { margin: 0; color: var(--color-text-muted); font-size: 13px; letter-spacing: 0; }
 .feature-tool-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 8px; color: var(--color-primary); background: var(--color-primary-light); flex: 0 0 auto; }
 .feature-tool-icon svg { width: 22px; height: 22px; }
+.session-tool-layout { display: grid; grid-template-columns: minmax(0, 1fr) 144px; grid-template-areas: "heading fingerprint" "format fingerprint" "converter fingerprint"; column-gap: 10px; width: calc(100% + 154px); }
+.session-tool-layout > .feature-tool-heading { grid-area: heading; }
+.session-tool-layout > .session-format-bar { grid-area: format; }
+.session-tool-layout > .session-converter-grid { grid-area: converter; }
+.session-fingerprint-setting { grid-area: fingerprint; align-self: start; min-width: 0; padding: 9px 8px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-bg-card); }
+.session-fingerprint-setting label { display: block; margin-bottom: 8px; color: var(--color-text-primary); font-size: 11px; font-weight: 650; letter-spacing: 0; }
+.session-fingerprint-setting select { display: block; width: 100%; height: 31px; padding: 0 5px; border: 1px solid var(--color-border); border-radius: 6px; outline: none; background: var(--color-bg); color: var(--color-text-primary); font-size: 10px; letter-spacing: 0; cursor: pointer; }
+.session-fingerprint-setting select:focus { border-color: var(--color-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 12%, transparent); }
+.session-fingerprint-setting p { margin: 8px 0 0; color: var(--color-warning); font-size: 10px; line-height: 1.5; letter-spacing: 0; }
 .session-account-settings { flex: 1 1 auto; min-width: 0; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-bg-card); }
 .session-account-settings-top { display: grid; grid-template-columns: minmax(150px, auto) minmax(180px, 1fr) repeat(3, minmax(92px, 110px)); align-items: center; gap: 8px; margin-bottom: 7px; }
 .session-account-settings-top > strong { color: var(--color-text-primary); font-size: 12px; font-weight: 650; letter-spacing: 0; }
@@ -845,6 +854,14 @@ body {
 .feature-issues { max-height: 160px; overflow: auto; padding: 10px 12px; margin-bottom: 14px; border-left: 3px solid var(--color-warning); background: var(--color-bg-card); color: var(--color-text-secondary); font-size: 12px; line-height: 1.8; }
 .feature-issues strong { color: var(--color-text-primary); font-weight: 600; }
 
+@media (max-width: 1708px) {
+  .session-tool-layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "heading" "fingerprint" "format" "converter"; width: 100%; column-gap: 0; }
+  .session-fingerprint-setting { display: grid; grid-template-columns: minmax(150px, auto) minmax(220px, 1fr); align-items: center; gap: 5px 12px; margin-bottom: 20px; padding: 9px 10px; }
+  .session-fingerprint-setting label { margin: 0; }
+  .session-fingerprint-setting select { font-size: 12px; }
+  .session-fingerprint-setting p { grid-column: 2; margin: 0; }
+}
+
 @media (max-width: 1360px) {
   .feature-tool-heading { flex-direction: column; }
   .feature-tool-heading-copy { flex-basis: auto; }
@@ -867,6 +884,8 @@ body {
   .main-content:has(.session-converter-page) { padding: 16px 12px; }
   .feature-tool-heading { align-items: flex-start; }
   .feature-tool-heading-copy { width: 100%; }
+  .session-fingerprint-setting { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .session-fingerprint-setting p { grid-column: 1; }
   .session-account-number-field { grid-template-columns: 1fr; gap: 3px; }
   .session-model-setting-row { grid-template-columns: 1fr; gap: 3px; }
   .session-model-setting-label { padding-top: 0; }

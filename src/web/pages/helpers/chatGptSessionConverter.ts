@@ -9,6 +9,15 @@ export const SESSION_OUTPUT_FORMATS = [
 
 export type SessionOutputFormat = typeof SESSION_OUTPUT_FORMATS[number];
 
+export const SUB2API_CODEX_FINGERPRINT_MODES = [
+  'off',
+  'device',
+  'session',
+  'full',
+] as const;
+
+export type Sub2ApiCodexFingerprintMode = typeof SUB2API_CODEX_FINGERPRINT_MODES[number];
+
 export const SESSION_OUTPUT_LABELS: Record<SessionOutputFormat, string> = {
   sub2api: 'sub2api',
   cpa: 'CPA',
@@ -53,6 +62,7 @@ export type Sub2ApiAccountOutputSettings = {
   priority?: number;
   rateMultiplier?: number;
   importGroup?: string;
+  codexFingerprintMode?: Sub2ApiCodexFingerprintMode;
 };
 
 export type SessionConversionResult = {
@@ -375,6 +385,19 @@ function buildModelMapping(models: string[] | undefined): Record<string, string>
     : undefined;
 }
 
+function normalizeCodexFingerprintMode(
+  value: unknown,
+): Exclude<Sub2ApiCodexFingerprintMode, 'off'> | undefined {
+  if (
+    typeof value !== 'string'
+    || value === 'off'
+    || !(SUB2API_CODEX_FINGERPRINT_MODES as readonly string[]).includes(value)
+  ) {
+    return undefined;
+  }
+  return value as Exclude<Sub2ApiCodexFingerprintMode, 'off'>;
+}
+
 function convertSession(
   record: Record<string, any>,
   sourceName: string,
@@ -538,6 +561,9 @@ function convertSession(
     : normalizeNonNegativeNumber(sub2apiAccountSettings.rateMultiplier, 1);
   const modelMapping = buildModelMapping(sub2apiAccountSettings?.models);
   const importGroup = firstNonEmpty(sub2apiAccountSettings?.importGroup);
+  const codexFingerprintMode = normalizeCodexFingerprintMode(
+    sub2apiAccountSettings?.codexFingerprintMode,
+  );
 
   const cpa = asOutputRecord(stripUnavailable({
     type: 'codex',
@@ -593,6 +619,7 @@ function convertSession(
       name,
       source: sourceType,
       last_refresh: exportedAt,
+      codex_fingerprint_mode: codexFingerprintMode,
     },
   }));
 

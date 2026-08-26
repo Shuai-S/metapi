@@ -81,6 +81,72 @@ describe('Features Sub2API account settings', () => {
     }
   });
 
+  it('applies the selected Codex fingerprint mode without persisting it', async () => {
+    const storage = createStorage();
+    vi.stubGlobal('localStorage', storage);
+
+    let root!: ReactTestRenderer;
+    try {
+      await act(async () => {
+        root = create(<Features />);
+      });
+
+      const fingerprintSelect = root.root.find((node) => (
+        node.type === 'select' && node.props['aria-label'] === 'Codex 指纹收敛'
+      ));
+      expect(fingerprintSelect.props.value).toBe('session');
+      expect(fingerprintSelect.findAllByType('option').map((option) => ({
+        value: option.props.value,
+        label: option.children.join(''),
+      }))).toEqual([
+        { value: 'off', label: '关闭（透传，默认）' },
+        { value: 'device', label: '仅设备' },
+        { value: 'session', label: '设备+会话' },
+        { value: 'full', label: '完全收敛' },
+      ]);
+
+      const fillExampleButton = root.root.find((node) => (
+        node.type === 'button' && node.props.children === '填入示例'
+      ));
+      await act(async () => {
+        fillExampleButton.props.onClick();
+      });
+
+      const outputAccount = () => {
+        const output = root.root.find((node) => (
+          node.type === 'textarea' && node.props['aria-label'] === '转换输出'
+        ));
+        return JSON.parse(output.props.value).accounts[0];
+      };
+      expect(outputAccount().extra.codex_fingerprint_mode).toBe('session');
+
+      storage.setItem.mockClear();
+      storage.removeItem.mockClear();
+      await act(async () => {
+        fingerprintSelect.props.onChange({ target: { value: 'off' } });
+      });
+      expect(outputAccount().extra).not.toHaveProperty('codex_fingerprint_mode');
+
+      await act(async () => {
+        fingerprintSelect.props.onChange({ target: { value: 'full' } });
+      });
+      expect(outputAccount().extra.codex_fingerprint_mode).toBe('full');
+      expect(storage.setItem).not.toHaveBeenCalled();
+      expect(storage.removeItem).not.toHaveBeenCalled();
+
+      await act(async () => {
+        root.unmount();
+        root = create(<Features />);
+      });
+      const remountedSelect = root.root.find((node) => (
+        node.type === 'select' && node.props['aria-label'] === 'Codex 指纹收敛'
+      ));
+      expect(remountedSelect.props.value).toBe('session');
+    } finally {
+      root?.unmount();
+    }
+  });
+
   it('keeps the converter usable when browser storage is unavailable', async () => {
     vi.stubGlobal('localStorage', {
       getItem: vi.fn(() => {
