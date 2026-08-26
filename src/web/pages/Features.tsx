@@ -25,6 +25,7 @@ const EXAMPLE_SESSION = JSON.stringify({
 const DEFAULT_SUB2API_MODELS = [
   'codex-auto-review',
   'gpt-5.4',
+  'gpt-5.4-mini',
   'gpt-5.5',
   'gpt-5.6-luna',
   'gpt-5.6-sol',

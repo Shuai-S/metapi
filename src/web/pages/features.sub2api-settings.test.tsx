@@ -37,6 +37,32 @@ describe('Features Sub2API account settings', () => {
     vi.clearAllMocks();
   });
 
+  it('shows the complete default model list', async () => {
+    let root!: ReactTestRenderer;
+    try {
+      await act(async () => {
+        root = create(<Features />);
+      });
+
+      const modelChips = root.root.findAll((node) => (
+        node.type === 'span' && node.props.className === 'session-model-chip'
+      ));
+      expect(modelChips.map((chip) => (
+        chip.findByType('button').props['aria-label'].replace('移除模型 ', '')
+      ))).toEqual([
+        'codex-auto-review',
+        'gpt-5.4',
+        'gpt-5.4-mini',
+        'gpt-5.5',
+        'gpt-5.6-luna',
+        'gpt-5.6-sol',
+        'gpt-5.6-terra',
+      ]);
+    } finally {
+      root?.unmount();
+    }
+  });
+
   it('restores, updates, and clears the last import group', async () => {
     const storage = createStorage({
       [SESSION_CONVERTER_SUB2API_IMPORT_GROUP_STORAGE_KEY]: '  saved-pool  ',
