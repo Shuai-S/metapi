@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../db/index.js', () => ({
@@ -47,7 +48,45 @@ function account(name: string, email: string) {
   };
 }
 
+function scopedAccount(name: string, email: string, userId: string) {
+  const value = account(name, email);
+  return {
+    ...value,
+    credentials: {
+      ...value.credentials,
+      chatgpt_account_id: 'shared-workspace',
+      chatgpt_user_id: userId,
+    },
+  };
+}
+
+function legacyReference(value: ReturnType<typeof scopedAccount>): string {
+  const identity = {
+    platform: 'openai',
+    type: 'oauth',
+    accountId: value.credentials.chatgpt_account_id,
+  };
+  return `metapi:v1:${createHash('sha256').update(JSON.stringify(identity)).digest('hex')}`;
+}
+
 describe('sub2apiPoolService', () => {
+  it('uses the workspace and user together for stable push references', () => {
+    const first = scopedAccount('first@example.com', 'first@example.com', 'user-1');
+    const second = scopedAccount('second@example.com', 'second@example.com', 'user-2');
+    const refreshed = {
+      ...first,
+      credentials: {
+        ...first.credentials,
+        access_token: 'new-access-token',
+        refresh_token: 'new-refresh-token',
+      },
+    };
+
+    expect(buildSub2ApiPushReference(first)).toMatch(/^metapi:v2:[a-f0-9]{64}$/);
+    expect(buildSub2ApiPushReference(first)).not.toBe(buildSub2ApiPushReference(second));
+    expect(buildSub2ApiPushReference(first)).toBe(buildSub2ApiPushReference(refreshed));
+  });
+
   it('encrypts the admin key and returns only a masked value', async () => {
     let stored: unknown = null;
     const service = createSub2ApiPoolService({
@@ -195,5 +234,74 @@ describe('sub2apiPoolService', () => {
     expect(calls.filter((call) => (
       call.url.endsWith('/api/v1/admin/accounts') && call.init?.method === 'POST'
     ))).toHaveLength(1);
+  });
+
+  it('migrates a matching legacy reference without collapsing users in one workspace', async () => {
+    let stored: unknown = null;
+    let ledger: unknown = null;
+    const first = scopedAccount('first@example.com', 'first@example.com', 'user-1');
+    const second = scopedAccount('second@example.com', 'second@example.com', 'user-2');
+    const third = scopedAccount('third@example.com', 'third@example.com', 'user-3');
+    const createBodies: any[] = [];
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes('/api/v1/admin/accounts?')) {
+        return jsonResponse({
+          code: 0,
+          data: {
+            items: [{
+              id: 4,
+              name: first.name,
+              extra: {
+                email: first.credentials.email,
+                metapi_push_ref: legacyReference(first),
+              },
+            }],
+            total: 1,
+          },
+        });
+      }
+      if (url.endsWith('/api/v1/admin/accounts') && init?.method === 'POST') {
+        createBodies.push(JSON.parse(String(init.body)));
+        return jsonResponse({ code: 0, data: { id: 100 + createBodies.length } });
+      }
+      return jsonResponse({ message: 'not found' }, 404);
+    });
+    const service = createSub2ApiPoolService({
+      fetchImpl: fetchImpl as never,
+      readSetting: async () => stored,
+      writeSetting: async (value) => {
+        stored = value;
+      },
+      readPushLedger: async () => ledger,
+      writePushLedger: async (value) => {
+        ledger = value;
+      },
+    });
+    await service.saveConfig({
+      baseUrl: 'https://pool.example.com',
+      adminApiKey: 'admin-key-value',
+      groupIds: [7],
+      maxParallel: 2,
+    });
+
+    const result = await service.pushAccounts([first, second, third]);
+
+    expect(result).toMatchObject({ total: 3, created: 2, skipped: 1, failed: 0 });
+    expect(result.items.map((item) => item.status)).toEqual(['skipped', 'created', 'created']);
+    expect(createBodies.map((body) => body.name)).toEqual([second.name, third.name]);
+    const targetRefs = Object.values((ledger as any).targets)[0] as string[];
+    expect(targetRefs).toEqual(expect.arrayContaining([
+      buildSub2ApiPushReference(first),
+      buildSub2ApiPushReference(second),
+      buildSub2ApiPushReference(third),
+    ]));
+
+    await expect(service.pushAccounts([first, second, third])).resolves.toMatchObject({
+      total: 3,
+      created: 0,
+      skipped: 3,
+      failed: 0,
+    });
+    expect(createBodies).toHaveLength(2);
   });
 });

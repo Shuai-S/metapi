@@ -68,6 +68,32 @@ describe('ChatGPT Session converter', () => {
     });
   });
 
+  it('preserves identity fields from an existing sub2api export', () => {
+    const exportedAccessToken = token({
+      exp: Math.floor(Date.parse(expiresAt) / 1000),
+    });
+    const result = convert('sub2api', {
+      type: 'sub2api-data',
+      version: 1,
+      accounts: [{
+        name: 'exported@example.com',
+        credentials: {
+          access_token: exportedAccessToken,
+          account_id: 'workspace-from-credentials',
+          chatgpt_user_id: 'user-from-credentials',
+          email: 'exported@example.com',
+        },
+      }],
+    });
+
+    expect((result.output as any).accounts[0].credentials).toMatchObject({
+      account_id: 'workspace-from-credentials',
+      chatgpt_account_id: 'workspace-from-credentials',
+      chatgpt_user_id: 'user-from-credentials',
+      email: 'exported@example.com',
+    });
+  });
+
   it('applies configured models and account scheduling fields to sub2api output', () => {
     const result = convertChatGptSessionSources(
       [{ text: JSON.stringify(session), sourceName: 'session.json' }],

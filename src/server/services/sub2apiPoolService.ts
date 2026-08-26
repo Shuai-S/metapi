@@ -27,6 +27,18 @@ type PushLedger = {
   targets: Record<string, string[]>;
 };
 
+type PushIdentity = {
+  ref: string;
+  legacyRef: string;
+  legacyEquivalent: boolean;
+  matchKeys: string[];
+};
+
+type RemotePushSnapshot = {
+  refs: Set<string>;
+  entries: Array<{ ref: string; matchKeys: Set<string> }>;
+};
+
 type FetchLike = (
   url: string,
   init?: Parameters<typeof undiciFetch>[1],
@@ -153,7 +165,7 @@ function normalizePushLedger(value: unknown): PushLedger {
   for (const [target, refs] of Object.entries(record)) {
     if (!/^[a-f0-9]{32}$/.test(target) || !Array.isArray(refs)) continue;
     targets[target] = Array.from(new Set(refs
-      .filter((ref): ref is string => typeof ref === 'string' && /^metapi:v1:[a-f0-9]{64}$/.test(ref))))
+      .filter((ref): ref is string => typeof ref === 'string' && /^metapi:v[12]:[a-f0-9]{64}$/.test(ref))))
       .slice(-5000);
   }
   return { version: 1, targets };
@@ -288,25 +300,62 @@ function normalizeStringMap(value: unknown): JsonRecord | undefined {
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-export function buildSub2ApiPushReference(account: unknown): string {
+function buildSub2ApiPushIdentity(account: unknown): PushIdentity {
   const record = isRecord(account) ? account : {};
   const credentials = isRecord(record.credentials) ? record.credentials : {};
   const extra = isRecord(record.extra) ? record.extra : {};
   const accountId = firstString(
     credentials.account_id,
     credentials.chatgpt_account_id,
-    credentials.chatgpt_user_id,
   );
-  const email = firstString(credentials.email, extra.email, extra.email_key).toLowerCase();
+  const userId = firstString(credentials.chatgpt_user_id);
+  const email = firstString(credentials.email, extra.email).toLowerCase();
+  const emailKey = firstString(extra.email_key).toLowerCase();
+  const identityEmail = firstString(email, emailKey);
   const fallbackToken = firstString(credentials.refresh_token, credentials.access_token);
   const identity = accountId
-    ? { accountId }
-    : email
-      ? { email }
+    ? userId
+      ? { accountId, chatgptUserId: userId }
+      : identityEmail
+        ? { accountId, email: identityEmail }
+        : { accountId }
+    : userId
+      ? { chatgptUserId: userId }
+      : identityEmail
+        ? { email: identityEmail }
+        : fallbackToken
+          ? { tokenHash: hash(fallbackToken) }
+          : { name: firstString(record.name).toLowerCase() };
+  const legacyAccountId = firstString(accountId, userId);
+  const legacyEmail = firstString(credentials.email, extra.email, extra.email_key).toLowerCase();
+  const legacyIdentity = legacyAccountId
+    ? { accountId: legacyAccountId }
+    : legacyEmail
+      ? { email: legacyEmail }
       : fallbackToken
         ? { tokenHash: hash(fallbackToken) }
         : { name: firstString(record.name).toLowerCase() };
-  return `metapi:v1:${hash(JSON.stringify({ platform: 'openai', type: 'oauth', ...identity }))}`;
+  const identityPayload = { platform: 'openai', type: 'oauth', ...identity };
+  const legacyPayload = { platform: 'openai', type: 'oauth', ...legacyIdentity };
+  const matchKeys = new Set<string>();
+  if (userId) matchKeys.add(`user:${hash(userId)}`);
+  for (const value of [credentials.email, extra.email]) {
+    const normalized = firstString(value).toLowerCase();
+    if (normalized) matchKeys.add(`email:${hash(normalized)}`);
+  }
+  if (emailKey) matchKeys.add(`email-key:${hash(emailKey)}`);
+  const name = firstString(record.name).toLowerCase();
+  if (name) matchKeys.add(`name:${hash(name)}`);
+  return {
+    ref: `metapi:v2:${hash(JSON.stringify(identityPayload))}`,
+    legacyRef: `metapi:v1:${hash(JSON.stringify(legacyPayload))}`,
+    legacyEquivalent: JSON.stringify(identityPayload) === JSON.stringify(legacyPayload),
+    matchKeys: Array.from(matchKeys),
+  };
+}
+
+export function buildSub2ApiPushReference(account: unknown): string {
+  return buildSub2ApiPushIdentity(account).ref;
 }
 
 function normalizeFiniteNumber(value: unknown, fallback: number, integer = false): number {
@@ -315,7 +364,11 @@ function normalizeFiniteNumber(value: unknown, fallback: number, integer = false
   return integer ? Math.trunc(numeric) : numeric;
 }
 
-function normalizeAccount(account: unknown, groupIds: number[]): { name: string; ref: string; payload: JsonRecord } {
+function normalizeAccount(account: unknown, groupIds: number[]): {
+  name: string;
+  identity: PushIdentity;
+  payload: JsonRecord;
+} {
   if (!isRecord(account)) {
     throw new Sub2ApiPoolError('账号数据必须是对象', 400, 'INVALID_ACCOUNT');
   }
@@ -359,8 +412,8 @@ function normalizeAccount(account: unknown, groupIds: number[]): { name: string;
   if (Number.isInteger(tlsProfileId) && tlsProfileId > 0) {
     allowedExtra.tls_fingerprint_profile_id = tlsProfileId;
   }
-  const ref = buildSub2ApiPushReference(account);
-  allowedExtra.metapi_push_ref = ref;
+  const identity = buildSub2ApiPushIdentity(account);
+  allowedExtra.metapi_push_ref = identity.ref;
   allowedExtra.metapi_source = 'metapi';
 
   const payload: JsonRecord = {
@@ -385,22 +438,50 @@ function normalizeAccount(account: unknown, groupIds: number[]): { name: string;
   if (account.expires_at === null || (typeof account.expires_at === 'string' && account.expires_at.trim())) {
     payload.expires_at = account.expires_at === null ? null : account.expires_at.trim();
   }
-  return { name, ref, payload };
+  return { name, identity, payload };
 }
 
-function readPushRef(item: unknown): string {
-  if (!isRecord(item)) return '';
+function readAccountExtra(item: JsonRecord): JsonRecord {
   let extra: unknown = item.extra;
   if (typeof extra === 'string') {
     try {
       extra = JSON.parse(extra);
     } catch {
-      extra = null;
+      return {};
     }
   }
-  return isRecord(extra) && typeof extra.metapi_push_ref === 'string'
+  return isRecord(extra) ? extra : {};
+}
+
+function readPushRef(item: unknown): string {
+  if (!isRecord(item)) return '';
+  const extra = readAccountExtra(item);
+  return typeof extra.metapi_push_ref === 'string'
     ? extra.metapi_push_ref.trim()
     : '';
+}
+
+function buildRemoteMatchKeys(item: unknown): Set<string> {
+  if (!isRecord(item)) return new Set();
+  const credentials = isRecord(item.credentials) ? item.credentials : {};
+  const extra = readAccountExtra(item);
+  return new Set(buildSub2ApiPushIdentity({
+    name: item.name,
+    credentials,
+    extra,
+  }).matchKeys);
+}
+
+function hasMatchingKey(left: string[], right: Set<string>): boolean {
+  const isStrong = (key: string) => key.startsWith('user:')
+    || key.startsWith('email:')
+    || key.startsWith('email-key:');
+  const leftStrong = left.filter(isStrong);
+  const rightStrong = new Set(Array.from(right).filter(isStrong));
+  if (leftStrong.length > 0 && rightStrong.size > 0) {
+    return leftStrong.some((key) => rightStrong.has(key));
+  }
+  return left.some((key) => key.startsWith('name:') && right.has(key));
 }
 
 export function createSub2ApiPoolService(dependencies: ServiceDependencies = {}) {
@@ -518,8 +599,11 @@ export function createSub2ApiPoolService(dependencies: ServiceDependencies = {})
     });
   }
 
-  async function listRemoteAccountRefs(target: { baseUrl: string; adminApiKey: string }): Promise<Set<string>> {
+  async function listRemotePushSnapshot(
+    target: { baseUrl: string; adminApiKey: string },
+  ): Promise<RemotePushSnapshot> {
     const refs = new Set<string>();
+    const entries: RemotePushSnapshot['entries'] = [];
     for (let page = 1; page <= MAX_ACCOUNT_PAGES; page += 1) {
       const data = await requestJson(
         target,
@@ -528,19 +612,30 @@ export function createSub2ApiPoolService(dependencies: ServiceDependencies = {})
       const rows = extractCollection(data, ['items', 'accounts', 'list', 'records']);
       for (const row of rows) {
         const ref = readPushRef(row);
-        if (ref) refs.add(ref);
+        if (ref) {
+          refs.add(ref);
+          entries.push({ ref, matchKeys: buildRemoteMatchKeys(row) });
+        }
       }
       const total = isRecord(data) && Number.isFinite(Number(data.total))
         ? Number(data.total)
         : null;
       if (rows.length < PAGE_SIZE || (total !== null && page * PAGE_SIZE >= total)) break;
     }
-    return refs;
+    return { refs, entries };
+  }
+
+  function hasRemoteIdentity(snapshot: RemotePushSnapshot, identity: PushIdentity): boolean {
+    if (snapshot.refs.has(identity.ref)) return true;
+    return snapshot.entries.some((entry) => (
+      entry.ref === identity.legacyRef
+      && (identity.legacyEquivalent || hasMatchingKey(identity.matchKeys, entry.matchKeys))
+    ));
   }
 
   async function reconcilePush(target: { baseUrl: string; adminApiKey: string }, ref: string): Promise<boolean> {
     try {
-      return (await listRemoteAccountRefs(target)).has(ref);
+      return (await listRemotePushSnapshot(target)).refs.has(ref);
     } catch {
       return false;
     }
@@ -548,22 +643,20 @@ export function createSub2ApiPoolService(dependencies: ServiceDependencies = {})
 
   async function pushAccounts(accounts: unknown[]): Promise<Sub2ApiPoolPushResult> {
     const target = await resolveConfiguredTarget(true);
-    const remoteRefs = await listRemoteAccountRefs(target);
+    const remote = await listRemotePushSnapshot(target);
     const targetLedgerKey = hash(target.baseUrl).slice(0, 32);
     const ledger = normalizePushLedger(await readPushLedger());
-    const knownRefs = new Set([
-      ...remoteRefs,
-      ...(ledger.targets[targetLedgerKey] || []),
-    ]);
+    const ledgerRefs = new Set(ledger.targets[targetLedgerKey] || []);
     const results: Array<Sub2ApiPoolPushItem | undefined> = new Array(accounts.length);
     const batchRefs = new Set<string>();
-    const createdRefs = new Set<string>();
+    const persistedRefs = new Set<string>();
     const jobs: Array<{ index: number; name: string; ref: string; payload: JsonRecord }> = [];
 
     accounts.forEach((account, index) => {
       try {
         const normalized = normalizeAccount(account, target.groupIds);
-        if (batchRefs.has(normalized.ref)) {
+        const { identity } = normalized;
+        if (batchRefs.has(identity.ref)) {
           results[index] = {
             index,
             name: normalized.name,
@@ -572,17 +665,20 @@ export function createSub2ApiPoolService(dependencies: ServiceDependencies = {})
           };
           return;
         }
-        batchRefs.add(normalized.ref);
-        if (knownRefs.has(normalized.ref)) {
+        batchRefs.add(identity.ref);
+        const knownByLedger = ledgerRefs.has(identity.ref)
+          || (identity.legacyEquivalent && ledgerRefs.has(identity.legacyRef));
+        if (knownByLedger || hasRemoteIdentity(remote, identity)) {
           results[index] = {
             index,
             name: normalized.name,
             status: 'skipped',
             message: '远端号池或本地推送记录已存在',
           };
+          if (!ledgerRefs.has(identity.ref)) persistedRefs.add(identity.ref);
           return;
         }
-        jobs.push({ index, ...normalized });
+        jobs.push({ index, name: normalized.name, ref: identity.ref, payload: normalized.payload });
       } catch (error) {
         results[index] = {
           index,
@@ -615,7 +711,7 @@ export function createSub2ApiPoolService(dependencies: ServiceDependencies = {})
             ...(accountId !== undefined ? { accountId } : {}),
             message: '已推送到远端号池',
           };
-          createdRefs.add(job.ref);
+          persistedRefs.add(job.ref);
         } catch (error) {
           const ambiguous = error instanceof Sub2ApiPoolError
             && ['REMOTE_NETWORK_AMBIGUOUS', 'REMOTE_RETRYABLE'].includes(error.code);
@@ -626,7 +722,7 @@ export function createSub2ApiPoolService(dependencies: ServiceDependencies = {})
               status: 'created',
               message: '远端已创建，已通过幂等标记确认',
             };
-            createdRefs.add(job.ref);
+            persistedRefs.add(job.ref);
           } else {
             results[job.index] = {
               index: job.index,
@@ -643,12 +739,12 @@ export function createSub2ApiPoolService(dependencies: ServiceDependencies = {})
       () => worker(),
     ));
 
-    if (createdRefs.size > 0) {
+    if (persistedRefs.size > 0) {
       try {
         const latestLedger = normalizePushLedger(await readPushLedger());
         latestLedger.targets[targetLedgerKey] = Array.from(new Set([
           ...(latestLedger.targets[targetLedgerKey] || []),
-          ...createdRefs,
+          ...persistedRefs,
         ])).slice(-5000);
         await writePushLedger(latestLedger);
       } catch {
