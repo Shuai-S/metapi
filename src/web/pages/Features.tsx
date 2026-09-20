@@ -11,6 +11,7 @@ import {
   type Sub2ApiCodexFingerprintMode,
 } from './helpers/chatGptSessionConverter.js';
 import { buildSessionDownload } from './helpers/sessionDownload.js';
+import Sub2ApiModelSelector from './features/Sub2ApiModelSelector.js';
 import Sub2ApiPoolPanel from './features/Sub2ApiPoolPanel.js';
 
 const EXAMPLE_SESSION = JSON.stringify({
@@ -21,16 +22,6 @@ const EXAMPLE_SESSION = JSON.stringify({
   refreshToken: 'paste-real-refresh-token-here',
   idToken: 'paste-real-id-token-here',
 }, null, 2);
-
-const DEFAULT_SUB2API_MODELS = [
-  'codex-auto-review',
-  'gpt-5.4',
-  'gpt-5.4-mini',
-  'gpt-5.5',
-  'gpt-5.6-luna',
-  'gpt-5.6-sol',
-  'gpt-5.6-terra',
-];
 
 const SUB2API_CODEX_FINGERPRINT_LABELS: Record<Sub2ApiCodexFingerprintMode, string> = {
   off: '关闭（透传，默认）',
@@ -102,8 +93,7 @@ export default function Features() {
   const [isDragging, setIsDragging] = useState(false);
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
   const [readError, setReadError] = useState('');
-  const [accountModels, setAccountModels] = useState([...DEFAULT_SUB2API_MODELS]);
-  const [modelDraft, setModelDraft] = useState('');
+  const [accountModels, setAccountModels] = useState<string[]>([]);
   const [accountConcurrency, setAccountConcurrency] = useState('10');
   const [accountRateMultiplier, setAccountRateMultiplier] = useState('0');
   const [accountPriority, setAccountPriority] = useState('1');
@@ -146,17 +136,6 @@ export default function Features() {
     () => result?.converted.map((item) => item.sub2apiAccount) || [],
     [result],
   );
-
-  const commitModelDraft = () => {
-    const additions = modelDraft
-      .split(/[,\n，]/u)
-      .map((model) => model.trim())
-      .filter(Boolean);
-    if (additions.length) {
-      setAccountModels((current) => Array.from(new Set([...current, ...additions])));
-    }
-    setModelDraft('');
-  };
 
   const setPastedInput = (value: string) => {
     setInputText(value);
@@ -281,34 +260,7 @@ export default function Features() {
 
             <div className="session-model-setting-row">
               <span className="session-model-setting-label">{tr('模型')}</span>
-              <div className="session-model-tags">
-                {accountModels.map((model) => (
-                  <span key={model} className="session-model-chip">
-                    <span>{model}</span>
-                    <button
-                      type="button"
-                      aria-label={`${tr('移除模型')} ${model}`}
-                      title={`${tr('移除模型')} ${model}`}
-                      onClick={() => setAccountModels((current) => current.filter((item) => item !== model))}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-                <input
-                  type="text"
-                  value={modelDraft}
-                  aria-label={tr('添加模型')}
-                  placeholder={tr('输入模型后按回车')}
-                  onChange={(event) => setModelDraft(event.target.value)}
-                  onBlur={commitModelDraft}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter' && event.key !== ',') return;
-                    event.preventDefault();
-                    commitModelDraft();
-                  }}
-                />
-              </div>
+              <Sub2ApiModelSelector value={accountModels} onChange={setAccountModels} />
             </div>
           </div>
         </div>

@@ -793,13 +793,43 @@ body {
 .session-account-number-field input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 12%, transparent); }
 .session-model-setting-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px; }
 .session-model-setting-label { padding-top: 7px; color: var(--color-text-muted); font-size: 11px; font-weight: 600; }
-.session-model-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 31px; max-height: 60px; overflow: auto; padding: 3px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg); }
-.session-model-chip { display: inline-flex; align-items: center; min-width: 0; height: 23px; padding: 0 3px 0 7px; border: 1px solid color-mix(in srgb, var(--color-primary) 20%, var(--color-border)); border-radius: 5px; background: var(--color-primary-light); color: var(--color-text-secondary); font: 10px var(--font-mono); letter-spacing: 0; }
-.session-model-chip > span { max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-model-chip button { width: 19px; height: 19px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-muted); font: 14px/1 var(--font-sans); cursor: pointer; }
+.session-model-selector { position: relative; min-width: 0; }
+.session-model-selector-control { min-height: 31px; overflow: hidden; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg); transition: border-color 0.15s, box-shadow 0.15s; }
+.session-model-selector.is-open .session-model-selector-control { border-color: var(--color-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 12%, transparent); }
+.session-model-selector-selected { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; max-height: 58px; overflow: auto; padding: 4px 4px 0; }
+.session-model-chip { display: inline-flex; align-items: center; gap: 4px; min-width: 0; height: 23px; padding: 0 3px 0 6px; border: 1px solid color-mix(in srgb, var(--color-primary) 20%, var(--color-border)); border-radius: 5px; background: var(--color-primary-light); color: var(--color-text-secondary); font: 10px var(--font-mono); letter-spacing: 0; }
+.session-model-chip-label { max-width: 148px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-model-chip button { width: 19px; height: 19px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-muted); cursor: pointer; }
+.session-model-chip button svg { width: 12px; height: 12px; }
 .session-model-chip button:hover { background: color-mix(in srgb, var(--color-danger) 10%, transparent); color: var(--color-danger); }
-.session-model-tags > input { flex: 1 1 130px; min-width: 110px; height: 23px; padding: 0 5px; border: 0; outline: none; background: transparent; color: var(--color-text-primary); font: 11px var(--font-mono); letter-spacing: 0; }
-.session-model-tags > input::placeholder { color: var(--color-text-muted); }
+.session-model-selector-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 30px; padding: 0 7px; border: 0; outline: none; background: transparent; color: var(--color-text-muted); font-size: 11px; letter-spacing: 0; cursor: pointer; }
+.session-model-selector-trigger svg { width: 15px; height: 15px; flex: 0 0 auto; transition: transform 0.15s; }
+.session-model-selector.is-open .session-model-selector-trigger svg { transform: rotate(180deg); }
+.session-model-selector-panel { position: absolute; z-index: 70; top: calc(100% + 5px); right: 0; left: 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg-card); box-shadow: 0 14px 32px rgba(0, 0, 0, 0.2); }
+.session-model-selector-search { display: flex; align-items: center; gap: 7px; padding: 7px; border-bottom: 1px solid var(--color-border-light); background: var(--color-bg-card); }
+.session-model-selector-search svg { width: 15px; height: 15px; flex: 0 0 auto; color: var(--color-text-muted); }
+.session-model-selector-search input { width: 100%; min-width: 0; height: 29px; padding: 0 7px; border: 1px solid var(--color-border); border-radius: 5px; outline: none; background: var(--color-bg); color: var(--color-text-primary); font: 11px var(--font-mono); letter-spacing: 0; }
+.session-model-selector-search input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 10%, transparent); }
+.session-model-selector-search input::placeholder { color: var(--color-text-muted); }
+.session-model-selector-options { max-height: 244px; overflow-y: auto; overscroll-behavior: contain; padding: 3px 0; }
+.session-model-selector-option { display: flex; align-items: stretch; min-height: 34px; transition: background 0.12s; }
+.session-model-selector-option:hover { background: var(--color-bg-hover); }
+.session-model-selector-option.is-selected { background: color-mix(in srgb, var(--color-primary) 9%, var(--color-bg-card)); }
+.session-model-selector-option label { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; padding: 6px 9px; color: var(--color-text-primary); cursor: pointer; }
+.session-model-selector-option input { width: 15px; height: 15px; flex: 0 0 auto; margin: 0; accent-color: var(--color-primary); }
+.session-model-selector-option-name { min-width: 0; overflow: hidden; color: var(--color-text-primary); font: 11px var(--font-mono); letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; }
+.session-model-selector-copy { display: grid; place-items: center; width: 34px; flex: 0 0 34px; padding: 0; border: 0; background: transparent; color: var(--color-text-muted); cursor: pointer; }
+.session-model-selector-copy:hover { color: var(--color-primary); }
+.session-model-selector-copy svg { width: 14px; height: 14px; }
+.session-model-selector-empty { padding: 18px 10px; color: var(--color-text-muted); font-size: 11px; text-align: center; }
+.session-model-selector-custom { display: grid; grid-template-columns: minmax(0, 1fr) 30px; gap: 6px; padding: 7px; border-top: 1px solid var(--color-border-light); background: var(--color-bg-card); }
+.session-model-selector-custom input { width: 100%; min-width: 0; height: 29px; padding: 0 7px; border: 1px solid var(--color-border); border-radius: 5px; outline: none; background: var(--color-bg); color: var(--color-text-primary); font: 11px var(--font-mono); letter-spacing: 0; }
+.session-model-selector-custom input:focus { border-color: var(--color-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 10%, transparent); }
+.session-model-selector-custom input::placeholder { color: var(--color-text-muted); }
+.session-model-selector-custom button { display: grid; place-items: center; width: 30px; height: 29px; padding: 0; border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-primary-light); color: var(--color-primary); cursor: pointer; }
+.session-model-selector-custom button:hover:not(:disabled) { border-color: var(--color-primary); }
+.session-model-selector-custom button:disabled { opacity: 0.45; cursor: not-allowed; }
+.session-model-selector-custom button svg { width: 15px; height: 15px; }
 .session-format-bar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; margin-bottom: 20px; }
 .session-format-label { color: var(--color-text-secondary); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .session-format-tabs { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; padding: 3px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-bg); }
@@ -926,7 +956,8 @@ body {
   .session-account-number-field { grid-template-columns: 1fr; gap: 3px; }
   .session-model-setting-row { grid-template-columns: 1fr; gap: 3px; }
   .session-model-setting-label { padding-top: 0; }
-  .session-model-tags { max-height: 96px; }
+  .session-model-selector-selected { max-height: 96px; }
+  .session-model-selector-options { max-height: 210px; }
   .session-format-bar { grid-template-columns: 1fr; }
   .session-format-label { display: none; }
   .session-refresh-toggle { grid-column: 1; white-space: normal; }

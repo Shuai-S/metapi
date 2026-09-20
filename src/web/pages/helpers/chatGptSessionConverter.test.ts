@@ -128,6 +128,19 @@ describe('ChatGPT Session converter', () => {
     });
   });
 
+  it('omits model mapping when the configured model selection is empty', () => {
+    const result = convertChatGptSessionSources(
+      [{ text: JSON.stringify(session), sourceName: 'session.json' }],
+      {
+        format: 'sub2api',
+        now,
+        sub2apiAccountSettings: { models: [] },
+      },
+    );
+
+    expect((result.output as any).accounts[0].credentials).not.toHaveProperty('model_mapping');
+  });
+
   it.each([
     ['off', undefined],
     ['device', 'device'],
